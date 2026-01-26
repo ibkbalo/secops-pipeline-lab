@@ -38,3 +38,10 @@ jobs:
         with:
           name: bandit-findings
           path: bandit-results.json
+          - name: Trufflehog Secret Scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ""
+          head: ${{ github.ref_name }}
+          extra_args: --no-verification
