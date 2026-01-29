@@ -18,30 +18,23 @@ jobs:
           path: ./
           base: ""
           head: ${{ github.ref_name }}
-          extra_args: --only-verified --no-verification
+          extra_args: --no-verification
 
   sast-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+
       - name: Install Bandit
         run: pip install bandit
+
       - name: Run Bandit Scan
-        run: bandit -r . -f json -o bandit-results.json || true
-      - name: Upload Bandit Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: bandit-findings
-          path: bandit-results.json
-          - name: Trufflehog Secret Scan
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: ./
-          base: ""
-          head: ${{ github.ref_name }}
-          extra_args: --no-verification
+        # -r . (scan whole folder) 
+        # -ll (Look for High Severity bugs only)
+        run: bandit -r . -ll -ii
