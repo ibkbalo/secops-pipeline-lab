@@ -1,8 +1,6 @@
 name: Security Scan Pipeline
 
-on:
-  push:
-    branches: [ "main" ]
+on: [push]
 
 jobs:
   secret-scan:
@@ -20,21 +18,33 @@ jobs:
           head: ${{ github.ref_name }}
           extra_args: --no-verification
 
-  sast-scan:
+  sast-and-library-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
-      - name: Install Bandit
-        run: pip install bandit
-
-      - name: Run Bandit Scan
-        # -r . (scan whole folder) 
-        # -ll (Look for High Severity bugs only)
+      - name: Install Bandit & Safety
+        run: pip install bandit safety
+      - name: Run Bandit (Logic Scan)
         run: bandit -r . -ll -ii
+      - name: Run Safety (Library Scan)
+        run: safety check
+
+  container-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Build local Docker image
+        run: docker build -t my-app-container:latest .
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'my-app-container:latest'
+          format: 'table'
+          exit-code: '1' # This tells the pipeline to fail (Red) if bugs are found
+          severity: 'CRITICAL,HIGH'
