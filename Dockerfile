@@ -1,9 +1,10 @@
-# Alpine 3.10 is still old/vulnerable but actually works.
-FROM alpine:3.10
+# Alpine 3.16 is vulnerable but stable enough to build
+FROM alpine:3.16
 
 LABEL maintainer="amazon-security-lab"
 
-# Installing an older version of curl that still exists
-RUN apk add --no-cache curl=7.66.0-r0
+# We won't specify a version for curl here to ensure it builds, 
+# but the older Alpine OS itself will have plenty of bugs for Trivy to find.
+RUN apk add --no-cache curl
 
 CMD ["echo", "Hello from the Secured Container!"]
