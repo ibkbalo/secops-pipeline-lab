@@ -18,7 +18,7 @@ jobs:
           head: ${{ github.ref_name }}
           extra_args: --no-verification
 
-  sast-and-library-scan:
+  application-scans:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -42,9 +42,22 @@ jobs:
       - name: Build local Docker image
         run: docker build -t my-app-container:latest .
       - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trufflehog@main # Using Trivy Action
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'my-app-container:latest'
           format: 'table'
-          exit-code: '1' # This tells the pipeline to fail (Red) if bugs are found
+          exit-code: '1'
           severity: 'CRITICAL,HIGH'
+
+  iac-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Test Terraform with Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./
+          framework: terraform
+          soft_fail: false # Hard fail if cloud is insecure
