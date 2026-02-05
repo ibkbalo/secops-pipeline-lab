@@ -1,4 +1,4 @@
-name: Security Scan Pipeline
+  name: Security Scan Pipeline
 
 on: [push]
 
@@ -59,3 +59,12 @@ jobs:
         with:
           directory: ./
           framework: terraform
+
+  ai-governance-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run AI Security Agent
+        run: |
+          python3 ai_security_agent.py     
