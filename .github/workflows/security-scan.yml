@@ -1,4 +1,4 @@
-  name: Security Scan Pipeline
+name: Security Scan Pipeline
 
 on: [push]
 
@@ -66,5 +66,4 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
       - name: Run AI Security Agent
-        run: |
-          python3 ai_security_agent.py     
+        run: python3 ai_security_agent.py
