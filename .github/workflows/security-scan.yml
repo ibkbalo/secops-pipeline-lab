@@ -77,3 +77,11 @@ jobs:
           echo "Scanning Project 10 files for hardcoded credentials..."
           # Targeted scan on the new Project 10 files to ensure zero-trust compliance
           grep -r "AKIA" vault_logic.py infrastructure_vault.tf || echo "COMPLIANT: No raw keys detected in secure zone"
+          
+          ai-network-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run AI Network Security Audit
+        run: python3 ai_network_auditor.py
