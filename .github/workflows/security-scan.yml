@@ -84,3 +84,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Run AI Network Security Audit
         run: python3 ai_network_auditor.py
+        
+        forensic-compliance-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Audit Forensic Response Logic
+        run: |
+          echo "Verifying automated incident response patterns..."
+          if grep -r "create_snapshot" forensic_snapshot.py; then
+            echo "COMPLIANT: Automated remediation logic detected."
+          else
+            echo "NON-COMPLIANT: Missing forensic backup automation."
+            exit 1
+          fi
