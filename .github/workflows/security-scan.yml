@@ -99,3 +99,12 @@ jobs:
             echo "NON-COMPLIANT: Missing forensic backup automation."
             exit 1
           fi
+       compliance-as-code:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Run SOC2 Automated Audit
+        run: |
+          echo "Generating Regulatory Compliance Report..."
+          python3 compliance_engine.py   
