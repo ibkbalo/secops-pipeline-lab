@@ -108,4 +108,5 @@ jobs:
       - name: Run SOC2 Automated Audit
         run: |
           echo "Generating Regulatory Compliance Report..."
-          python3 compliance_engine.py
+          # This command finds the file wherever it is and runs it
+          python3 $(find . -name "compliance_engine.py")
