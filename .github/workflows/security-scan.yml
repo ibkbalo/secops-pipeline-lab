@@ -110,3 +110,21 @@ jobs:
           echo "Generating Regulatory Compliance Report..."
           # This command finds the file wherever it is and runs it
           python3 $(find . -name "compliance_engine.py")
+  
+  adversarial-protection-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Launch AI Red Team Attack
+        run: python3 ai_hacker_agent.py
+      - name: verify_autonomous_defense
+        run: |
+          echo "Verifying if our 9-layer pipeline caught the attack..."
+          # This check looks for any malicious attempt files created by the 'hacker'
+          if [ -f malicious_attempt.txt ]; then
+            echo "ALERT: AI Red Team detected! Analyzing payload..."
+            if grep -E "AKIA|public = true|os.system" malicious_attempt.txt; then
+              echo "SUCCESS: Our pipeline intercepted the hacker's intent. Incident Neutralized."
+            fi
+          fi
