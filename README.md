@@ -1,5 +1,5 @@
 # Enterprise Cloud Security & Autonomous Governance Lab
-### Developed by [Your Name] | Senior Security Engineering Candidate
+### Developed by Ibukun Balogun | Senior Security Engineering Candidate
 
 ## 🛡️ Project Overview
 This repository demonstrates a **10-Layer Hardened DevSecOps Pipeline** designed for high-velocity cloud environments (AWS/Amazon scale). This project solves the "Speed vs. Security" friction by implementing autonomous guardrails that intercept threats before they reach production.
