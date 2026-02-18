@@ -27,12 +27,22 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - name: Install Bandit & Safety
-        run: pip install bandit safety
+      - name: Install Bandit
+        run: pip install bandit
       - name: Run Bandit (Logic Scan)
         run: bandit -r . -ll -ii
-      - name: Run Safety (Library Scan)
-        run: safety check || echo "Library vulnerabilities found but allowing build for lab purposes"
+
+  supply-chain-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+      - name: Install Safety
+        run: pip install safety
+      - name: Run Safety (Dependency Audit)
+        run: safety check -r requirements.txt || echo "Vulnerabilities found but allowing build for lab demo"
 
   container-scan:
     runs-on: ubuntu-latest
@@ -108,7 +118,6 @@ jobs:
       - name: Run SOC2 Automated Audit
         run: |
           echo "Generating Regulatory Compliance Report..."
-          # This command finds the file wherever it is and runs it
           python3 $(find . -name "compliance_engine.py")
   
   adversarial-protection-test:
@@ -121,7 +130,6 @@ jobs:
       - name: verify_autonomous_defense
         run: |
           echo "Verifying if our 9-layer pipeline caught the attack..."
-          # This check looks for any malicious attempt files created by the 'hacker'
           if [ -f malicious_attempt.txt ]; then
             echo "ALERT: AI Red Team detected! Analyzing payload..."
             if grep -E "AKIA|public = true|os.system" malicious_attempt.txt; then
