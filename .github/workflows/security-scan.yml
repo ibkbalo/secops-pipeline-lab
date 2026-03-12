@@ -151,14 +151,20 @@ jobs:
           nmap -Pn -p 80,443,3306,8200 localhost -oX nmap_audit.xml
           echo "✅ Offensive Telemetry Generated."
 
-      - name: "Phase 2: SOAR Neutralization Logic"
-        # This implements our 'Project 18' logic inside the pipeline
+      - name: "Phase 2: Universal Anomaly Detection (SOAR)"
         run: |
-          echo "Identifying unauthorized database vectors..."
-          if grep -q "3306" nmap_audit.xml; then
-            echo "🚨 CRITICAL: Persistent Attack Vector Detected (3306)!"
-            echo "🛡️ SOAR: Triggering Active Defender to neutralize environment."
-            exit 1 # FAIL THE BUILD (The 'Self-Healing' Hard-Stop)
+          # 1. Define our "Golden Policy" (Allowed Ports Only)
+          ALLOWED_PORTS="80|443"
+          
+          # 2. Search the Nmap results for ANY open port NOT in our policy
+          # We are hunting for 'open' ports that AREN'T 80 or 443
+          UNAUTHORIZED_FINDINGS=$(grep "portid=" nmap_audit.xml | grep -vE "$ALLOWED_PORTS")
+
+          if [ ! -z "$UNAUTHORIZED_FINDINGS" ]; then
+            echo "🚨 CRITICAL: UNEXPECTED ATTACK VECTOR DETECTED!"
+            echo "Findings: $UNAUTHORIZED_FINDINGS"
+            echo "🛡️ SOAR: Triggering UNKNOWN_VECTOR_NEUTRALIZATION..."
+            exit 1 # THE AUTOMATIC HARD-STOP (Self-Healing)
           else
-            echo "✅ PERIMETER SECURE: No unauthorized ingress points detected."
-          fi   
+            echo "✅ DYNAMIC AUDIT: No unauthorized anomalies detected."
+          fi
