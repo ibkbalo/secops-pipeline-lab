@@ -136,3 +136,29 @@ jobs:
               echo "SUCCESS: Our pipeline intercepted the hacker's intent. Incident Neutralized."
             fi
           fi
+       
+  autonomous-perimeter-validation:
+    needs: adversarial-protection-test # Wait for the hack attempt to finish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: "Phase 1: Performance Audit (Nmap)"
+        # This simulates our 'Project 15' external reconnaissance
+        run: |
+          sudo apt-get install -y nmap
+          nmap -Pn -p 80,443,3306,8200 localhost -oX nmap_audit.xml
+          echo "✅ Offensive Telemetry Generated."
+
+      - name: "Phase 2: SOAR Neutralization Logic"
+        # This implements our 'Project 18' logic inside the pipeline
+        run: |
+          echo "Identifying unauthorized database vectors..."
+          if grep -q "3306" nmap_audit.xml; then
+            echo "🚨 CRITICAL: Persistent Attack Vector Detected (3306)!"
+            echo "🛡️ SOAR: Triggering Active Defender to neutralize environment."
+            exit 1 # FAIL THE BUILD (The 'Self-Healing' Hard-Stop)
+          else
+            echo "✅ PERIMETER SECURE: No unauthorized ingress points detected."
+          fi   
