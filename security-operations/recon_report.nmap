@@ -1,0 +1,50 @@
+Starting Nmap 7.80 ( https://nmap.org ) at 2026-03-21 16:01 Eastern Daylight Time
+Stats: 0:00:34 elapsed; 0 hosts completed (1 up), 1 undergoing Service Scan
+Service scan Timing: About 0.00% done
+Stats: 0:00:39 elapsed; 0 hosts completed (1 up), 1 undergoing Service Scan
+Service scan Timing: About 0.00% done
+Nmap scan report for kubernetes.docker.internal (127.0.0.1)
+Host is up (0.00s latency).
+
+PORT     STATE SERVICE VERSION
+5000/tcp open  upnp?
+1 service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port5000-TCP:V=7.80%I=7%D=3/21%Time=69BEF90F%P=i686-pc-windows-windows%
+SF:r(GetRequest,185,"HTTP/1\.1\x20404\x20NOT\x20FOUND\r\nServer:\x20Werkze
+SF:ug/3\.1\.6\x20Python/3\.12\.13\r\nDate:\x20Sat,\x2021\x20Mar\x202026\x2
+SF:020:01:19\x20GMT\r\nContent-Type:\x20text/html;\x20charset=utf-8\r\nCon
+SF:tent-Length:\x20207\r\nConnection:\x20close\r\n\r\n<!doctype\x20html>\n
+SF:<html\x20lang=en>\n<title>404\x20Not\x20Found</title>\n<h1>Not\x20Found
+SF:</h1>\n<p>The\x20requested\x20URL\x20was\x20not\x20found\x20on\x20the\x
+SF:20server\.\x20If\x20you\x20entered\x20the\x20URL\x20manually\x20please\
+SF:x20check\x20your\x20spelling\x20and\x20try\x20again\.</p>\n")%r(RTSPReq
+SF:uest,16C,"<!DOCTYPE\x20HTML>\n<html\x20lang=\"en\">\n\x20\x20\x20\x20<h
+SF:ead>\n\x20\x20\x20\x20\x20\x20\x20\x20<meta\x20charset=\"utf-8\">\n\x20
+SF:\x20\x20\x20\x20\x20\x20\x20<title>Error\x20response</title>\n\x20\x20\
+SF:x20\x20</head>\n\x20\x20\x20\x20<body>\n\x20\x20\x20\x20\x20\x20\x20\x2
+SF:0<h1>Error\x20response</h1>\n\x20\x20\x20\x20\x20\x20\x20\x20<p>Error\x
+SF:20code:\x20400</p>\n\x20\x20\x20\x20\x20\x20\x20\x20<p>Message:\x20Bad\
+SF:x20request\x20version\x20\('RTSP/1\.0'\)\.</p>\n\x20\x20\x20\x20\x20\x2
+SF:0\x20\x20<p>Error\x20code\x20explanation:\x20400\x20-\x20Bad\x20request
+SF:\x20syntax\x20or\x20unsupported\x20method\.</p>\n\x20\x20\x20\x20</body
+SF:>\n</html>\n")%r(HTTPOptions,185,"HTTP/1\.1\x20404\x20NOT\x20FOUND\r\nS
+SF:erver:\x20Werkzeug/3\.1\.6\x20Python/3\.12\.13\r\nDate:\x20Sat,\x2021\x
+SF:20Mar\x202026\x2020:01:34\x20GMT\r\nContent-Type:\x20text/html;\x20char
+SF:set=utf-8\r\nContent-Length:\x20207\r\nConnection:\x20close\r\n\r\n<!do
+SF:ctype\x20html>\n<html\x20lang=en>\n<title>404\x20Not\x20Found</title>\n
+SF:<h1>Not\x20Found</h1>\n<p>The\x20requested\x20URL\x20was\x20not\x20foun
+SF:d\x20on\x20the\x20server\.\x20If\x20you\x20entered\x20the\x20URL\x20man
+SF:ually\x20please\x20check\x20your\x20spelling\x20and\x20try\x20again\.</
+SF:p>\n")%r(Help,167,"<!DOCTYPE\x20HTML>\n<html\x20lang=\"en\">\n\x20\x20\
+SF:x20\x20<head>\n\x20\x20\x20\x20\x20\x20\x20\x20<meta\x20charset=\"utf-8
+SF:\">\n\x20\x20\x20\x20\x20\x20\x20\x20<title>Error\x20response</title>\n
+SF:\x20\x20\x20\x20</head>\n\x20\x20\x20\x20<body>\n\x20\x20\x20\x20\x20\x
+SF:20\x20\x20<h1>Error\x20response</h1>\n\x20\x20\x20\x20\x20\x20\x20\x20<
+SF:p>Error\x20code:\x20400</p>\n\x20\x20\x20\x20\x20\x20\x20\x20<p>Message
+SF::\x20Bad\x20request\x20syntax\x20\('HELP'\)\.</p>\n\x20\x20\x20\x20\x20
+SF:\x20\x20\x20<p>Error\x20code\x20explanation:\x20400\x20-\x20Bad\x20requ
+SF:est\x20syntax\x20or\x20unsupported\x20method\.</p>\n\x20\x20\x20\x20</b
+SF:ody>\n</html>\n");
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 1 IP address (1 host up) scanned in 95.33 seconds
