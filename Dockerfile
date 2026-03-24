@@ -16,5 +16,9 @@ COPY . .
 # DETERMINISTIC PORT MAPPING (Project 1-5 Alignment)
 EXPOSE 5000
 
+# HARDENING: Create a non-privileged user (Project 6 Alignment)
+RUN useradd -m sentinel_user && chown -R sentinel_user /app
+USER sentinel_user
+
 # OPERATIONAL BOOTSTRAP
 CMD ["python", "app.py"]
