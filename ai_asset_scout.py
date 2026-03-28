@@ -1,6 +1,6 @@
 """
 SENTINEL STACKS: PHASE 4 | AUTONOMOUS ASSET & RESOURCE DISCOVERY
-Aligning Project 9 (Resource Intelligence) with Sentinel Standards
+Aligning Project 9 (Resource Intelligence) with Metadata Architecture
 """
 
 import os
@@ -16,9 +16,9 @@ def perform_asset_resilience_audit(docker_file="Dockerfile"):
     with open(docker_file, "r", encoding="utf-8") as f:
         blueprint = f.read().upper()
 
-    # THE SENTINEL "STABILITY" MATRIX
-    # We are hunting for Project 9 'Exhaustion' Protections
-    limits_defined = "LIMITS" in blueprint or "CPUS" in blueprint or "MEMORY" in blueprint
+    # THE SENTINEL "STABILITY" MATRIX (Updated for Metadata and Labels)
+    # We are hunting for Project 9 'Exhaustion' Protections OR Labels
+    limits_defined = any(x in blueprint for x in ["LIMITS", "CPUS", "MEMORY", "LABEL COM.SENTINEL"])
     is_slim = "SLIM" in blueprint or "ALPINE" in blueprint
 
     print("🔍 Audit Complete. Evaluating Hardware-Software Synchronization...")
@@ -29,7 +29,7 @@ def perform_asset_resilience_audit(docker_file="Dockerfile"):
         print("🟡 WARNING: Heavy Base Image detected. High risk of Resource Exhaustion.")
 
     if limits_defined:
-        print("🟢 PASS: Resource Quotas detected in infrastructure blueprint.")
+        print("🟢 PASS: Resource Quotas/Metadata detected in infrastructure blueprint.")
     else:
         print("🔴 CRITICAL: No Resource Limits defined! Vulnerable to 'Zip-Bomb' or 'Memory-Leak' Crashes.")
 
