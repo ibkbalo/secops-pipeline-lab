@@ -26,4 +26,13 @@ USER sentinel_user
 EXPOSE 5000
 
 # OPERATIONAL BOOTSTRAP
+
+# ... (Previous Dockerfile content)
+
+# RESOURCE QUOTAS: (Project 9 Alignment)
+# Defining the "Sovereign Limit" for Resource Exhaustion Prevention
+LABEL com.sentinel.cpu_limit="0.5"
+LABEL com.sentinel.mem_limit="512MB"
+
+# OPERATIONAL BOOTSTRAP
 CMD ["python", "app.py"]
