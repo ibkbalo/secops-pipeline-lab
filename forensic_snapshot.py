@@ -1,29 +1,38 @@
-import boto3
+"""
+SENTINEL STACKS: PROJECT 13 | HYBRID FORENSIC RECOVERY
+Aligning AWS Cloud Snapshots with Local Sovereign Restoration
+"""
+
+import os
+import shutil
 import datetime
 
-def trigger_forensic_snapshot(instance_id):
-    """
-    Simulates an automated response to a high-severity GuardDuty alert.
-    It 'Freezes' the disk of the compromised server for investigation.
-    """
-    print(f"[SECURITY-ALERT] High-severity anomaly detected on instance: {instance_id}")
-    print(f"[RESPONSE] Initializing Automated Forensic Response...")
+# --- PART A: THE LOCAL SOVEREIGN ENGINE (New Alignment) ---
+BACKUP_DIR = "security-operations/snapshots"
+TARGETS = ["app.py", "Dockerfile"]
 
-    # Timestamp for the evidence log
+def local_sovereign_backup():
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if not os.path.exists(BACKUP_DIR): os.makedirs(BACKUP_DIR)
+    
+    for f in TARGETS:
+        if os.path.exists(f):
+            shutil.copy2(f, f"{BACKUP_DIR}/{f}.{timestamp}.bak")
+    print(f"[{timestamp}] 🛡️ [LOCAL] Sovereign State Captured.")
+
+# --- PART B: THE ENTERPRISE CLOUD ENGINE (Original Code Logic) ---
+def trigger_cloud_forensic_snapshot(instance_id):
+    """
+    Simulates AWS EBS Snapshot trigger for forensic preservation.
+    """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     snapshot_name = f"Forensic-Evidence-{instance_id}-{timestamp}"
-
-    # In a real Amazon environment, we call: ec2.create_snapshot()
-    print(f"[ACTION] Creating EBS Snapshot: {snapshot_name}")
-    print(f"[ACTION] Isolating EBS Volume. Evidence preserved for SOC analysis.")
     
-    # SECURITY BEST PRACTICE: Add tags so it's not accidentally deleted
-    print(f"[TAGGING] Marking snapshot as 'LEGAL_HOLD' and 'DO_NOT_DELETE'")
-    
+    print(f"[ACTION] Creating Cloud EBS Snapshot: {snapshot_name}")
+    print(f"[TAGGING] Marking as 'LEGAL_HOLD' for Forensic Analysis.")
     return snapshot_name
 
 if __name__ == "__main__":
-    # Simulating an automated trigger from a Security Hub alert
-    test_instance = "i-0abcdef1234567890"
-    evidence_id = trigger_forensic_snapshot(test_instance)
-    print(f"[SUCCESS] Incident Response complete. Snapshot ID: {evidence_id}")
+    local_sovereign_backup()
+    trigger_cloud_forensic_snapshot("i-0abcdef1234567890")
+    print("\n🏆 RECOVERY STATUS: [HYBRID-RESILIENT] - Cloud & Local Protected.")
