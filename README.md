@@ -1,6 +1,8 @@
 # 🛡️ SENTINEL STACKS: Autonomous Security Orchestration
 ### **"Engineering Invisibility. Orchestrating Resilience. Proving Compliance."**
 
+![Live Operational Dashboard](https://img.shields.io/badge/LIVE-OPERATIONAL%20DASHBOARD-brightgreen?style=for-the-badge&logo=googlechrome&logoColor=white&link=https://ibkbalo.github.io/secops-pipeline-lab/)
+
 ---
 
 **Sentinel Stacks** is a mission-critical cybersecurity framework engineered for the 2026 AI Economy. We specialize in transforming vulnerable infrastructure into **Sovereign Fortresses** through Automated Hardening, JWT Identity Intelligence, and NIST-Mapped Forensic Governance.
