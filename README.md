@@ -34,8 +34,19 @@
 
 ---
 
-## 📊 Sentinel Operations (Active Portfolio: AI-FinTech Startup)
-> *Surgical Remediation of High-Severity Vulnerability Disclosures (Confidential Client Profile).*
+---
+
+## 📊 Sentinel Operations (Active Portfolio: DataVault CRM)
+> *Surgical Remediation of High-Severity Vulnerability Disclosures (Case Study: FinTech).*
+
+| Security Incident Matrix | Sentinel Response Engine | Professional Outcome |
+|---|---|---|
+| **Insecure Direct Object Reference (IDOR)** | `datavault_remediation.py` | 🟢 RESOLVED: Unauthorized Cross-Tenant access neutralized via Ownership Mapping. |
+| **Excessive Data Exposure & PCI Leak** | `Sovereign-DTO-Filter` | 🟢 RESOLVED: 100% PII/Banking Data Masking enforced at the Logic Layer. |
+| **Shadow API Surface Discovery** | `ai_api_scout.py` | 🟡 Active Evaluation |
+| **Identity Hijack Prevention** | `JWT_Gateway_Hardening` | 🟡 Active Evaluation |
+
+---
 
 | Security Incident Matrix | Sentinel Response Engine | Professional Outcome |
 |---|---|---|
