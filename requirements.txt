@@ -1,0 +1,8 @@
+# Application Libraries
+flask==2.0.1
+requests==2.25.1
+pandas==1.3.0
+
+# Security Tools (Dependencies for our pipeline)
+bandit==1.7.5
+safety==2.3.5

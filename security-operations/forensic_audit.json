@@ -1,0 +1,6 @@
+{
+  "vault_id": "SENTINEL-VAULT-PROD-01",
+  "data_status": "ENCRYPTED_AT_REST",
+  "sovereign_payload": "W2luc2VydF9zZW50aW5lbF9lbmNyeXB0ZWRfaWRlbnRpdHlfaGVyZV0=",
+  "audit_trail": "AES-256-GCM-ENABLED"
+}
