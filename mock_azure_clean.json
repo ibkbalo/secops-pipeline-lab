@@ -1,0 +1,85 @@
+{
+  "_description": "Mock Azure subscription with BEST PRACTICES — all CIS Azure checks pass, excellent security posture.",
+  "_subscription_id": "mock-sub-secure-eeee-ffff-gggg-hhhhhhhhhhhh",
+  "_tenant_id": "mock-tenant-secure-22222222-3333-4444-5555-666666666666",
+  "_region": "eastus",
+
+  "entra_id_security_defaults": {
+    "enabled": true,
+    "security_defaults_enabled": true
+  },
+
+  "conditional_access_policies": [
+    {"name": "require-mfa-all-users", "state": "enabled", "grant_controls": {"require_mfa": true}},
+    {"name": "block-legacy-auth", "state": "enabled", "grant_controls": {"require_mfa": false}}
+  ],
+
+  "entra_id_auth_methods": {
+    "legacy_auth_enabled": false,
+    "smtp_auth": false,
+    "imap": false,
+    "pop3": false
+  },
+
+  "entra_id_guest_settings": {
+    "guest_invite_restricted_to_admins": true,
+    "guest_users_permission_limited": true
+  },
+
+  "storage_accounts": [
+    {"name": "secureappdataprod", "secure_transfer_required": true, "allow_blob_public_access": false,
+     "encryption_key_source": "Microsoft.Keyvault", "minimum_tls_version": "TLS1_2"},
+    {"name": "diaglogsprod", "secure_transfer_required": true, "allow_blob_public_access": false,
+     "encryption_key_source": "Microsoft.Keyvault", "minimum_tls_version": "TLS1_2"}
+  ],
+
+  "nsg_rules": [
+    {"name": "allow-https-from-internet", "direction": "Inbound", "source": "Internet", "destination_port": "443",
+     "protocol": "Tcp", "access": "Allow", "priority": 100},
+    {"name": "deny-all-inbound", "direction": "Inbound", "source": "Internet", "destination_port": "*",
+     "protocol": "*", "access": "Deny", "priority": 4000}
+  ],
+
+  "key_vaults": [
+    {"name": "kv-app-secrets-prod", "soft_delete_enabled": true, "purge_protection_enabled": true,
+     "network_acls": {"default_action": "Deny"}, "enable_rbac_authorization": true}
+  ],
+
+  "defender_for_cloud": {
+    "tier": "Standard",
+    "plans": {
+      "Servers": "On",
+      "SqlServers": "On",
+      "StorageAccounts": "On",
+      "KeyVaults": "On",
+      "Containers": "On",
+      "AppServices": "On"
+    }
+  },
+
+  "activity_log_export": {
+    "export_to_log_analytics": true,
+    "export_to_storage_account": true,
+    "export_to_event_hub": false
+  },
+
+  "log_analytics_workspace": {
+    "name": "prod-workspace",
+    "retention_days": 730,
+    "sku": "PerGB2018"
+  },
+
+  "sql_databases": [
+    {"name": "sqldb-prod-primary", "server": "sqlsrv-prod", "tde_enabled": true, "auditing_enabled": true,
+     "public_network_access": false}
+  ],
+
+  "virtual_machines": [
+    {"name": "vm-web-prod-01", "is_production": true, "has_public_ip": false, "disk_encryption_enabled": true,
+     "os_type": "Linux"},
+    {"name": "vm-web-prod-02", "is_production": true, "has_public_ip": false, "disk_encryption_enabled": true,
+     "os_type": "Linux"},
+    {"name": "vm-db-prod-01", "is_production": true, "has_public_ip": false, "disk_encryption_enabled": true,
+     "os_type": "Windows"}
+  ]
+}

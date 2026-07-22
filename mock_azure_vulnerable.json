@@ -1,0 +1,88 @@
+{
+  "_description": "Mock Azure subscription with MULTIPLE misconfigurations — simulates a neglected dev/test environment.",
+  "_subscription_id": "mock-sub-aaaa-bbbb-cccc-dddddddddddd",
+  "_tenant_id": "mock-tenant-11111111-2222-3333-4444-555555555555",
+  "_region": "eastus",
+
+  "entra_id_security_defaults": {
+    "enabled": false,
+    "security_defaults_enabled": false
+  },
+
+  "conditional_access_policies": [
+    {"name": "block-legacy-auth", "state": "disabled", "grant_controls": {"require_mfa": false}}
+  ],
+
+  "entra_id_auth_methods": {
+    "legacy_auth_enabled": true,
+    "smtp_auth": true,
+    "imap": true,
+    "pop3": true
+  },
+
+  "entra_id_guest_settings": {
+    "guest_invite_restricted_to_admins": false,
+    "guest_users_permission_limited": false
+  },
+
+  "storage_accounts": [
+    {"name": "customerfilesdev", "secure_transfer_required": false, "allow_blob_public_access": true,
+     "encryption_key_source": "Microsoft.Storage", "minimum_tls_version": "TLS1_0"},
+    {"name": "applogssa", "secure_transfer_required": true, "allow_blob_public_access": false,
+     "encryption_key_source": "Microsoft.Storage", "minimum_tls_version": "TLS1_2"}
+  ],
+
+  "nsg_rules": [
+    {"name": "allow-ssh-internet", "direction": "Inbound", "source": "Internet", "destination_port": "22",
+     "protocol": "Tcp", "access": "Allow", "priority": 100},
+    {"name": "allow-rdp-internet", "direction": "Inbound", "source": "Internet", "destination_port": "3389",
+     "protocol": "Tcp", "access": "Allow", "priority": 110},
+    {"name": "allow-https-internal", "direction": "Inbound", "source": "VirtualNetwork", "destination_port": "443",
+     "protocol": "Tcp", "access": "Allow", "priority": 200}
+  ],
+
+  "key_vaults": [
+    {"name": "kv-app-secrets-dev", "soft_delete_enabled": false, "purge_protection_enabled": false,
+     "network_acls": {"default_action": "Allow"}, "enable_rbac_authorization": false}
+  ],
+
+  "defender_for_cloud": {
+    "tier": "Free",
+    "plans": {
+      "Servers": "Off",
+      "SqlServers": "Off",
+      "StorageAccounts": "Off",
+      "KeyVaults": "Off",
+      "Containers": "Off",
+      "AppServices": "Off"
+    }
+  },
+
+  "activity_log_export": {
+    "export_to_log_analytics": false,
+    "export_to_storage_account": false,
+    "export_to_event_hub": false
+  },
+
+  "log_analytics_workspace": {
+    "name": "default-workspace",
+    "retention_days": 30,
+    "sku": "PerGB2018"
+  },
+
+  "sql_databases": [
+    {"name": "sqldb-prod", "server": "sqlsrv-main", "tde_enabled": false, "auditing_enabled": false,
+     "public_network_access": true},
+    {"name": "sqldb-analytics", "server": "sqlsrv-main", "tde_enabled": false, "auditing_enabled": false,
+     "public_network_access": true}
+  ],
+
+  "virtual_machines": [
+    {"name": "vm-web-frontend", "is_production": true, "has_public_ip": true, "disk_encryption_enabled": false,
+     "os_type": "Linux"},
+    {"name": "vm-database", "is_production": true, "has_public_ip": true, "disk_encryption_enabled": false,
+     "os_type": "Windows"},
+    {"name": "vm-devtest", "is_production": false, "has_public_ip": true, "disk_encryption_enabled": false,
+     "os_type": "Linux"}
+  ]
+}
