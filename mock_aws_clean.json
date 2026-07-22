@@ -1,0 +1,88 @@
+{
+  "_description": "Mock AWS account with BEST PRACTICES — all CIS checks pass, excellent security posture.",
+  "_account_id": "mock-acct-secure-987654321098",
+  "_region": "us-east-1",
+
+  "iam_account_summary": {
+    "AccountMFAEnabled": 1,
+    "MinimumPasswordLength": 14,
+    "RequireUppercaseCharacters": true,
+    "RequireLowercaseCharacters": true,
+    "RequireNumbers": true,
+    "RequireSymbols": true,
+    "HardExpiry": true,
+    "MaxPasswordAge": 90,
+    "PasswordReusePrevention": 24
+  },
+
+  "iam_credential_report": [
+    {"user": "sre-admin", "PasswordEnabled": "true", "AccessKey1Active": "false", "MfaActive": "true"},
+    {"user": "ci-cd-bot", "PasswordEnabled": "false", "AccessKey1Active": "true", "AccessKey1LastRotated": "2026-07-01T10:00:00Z", "MfaActive": "false"},
+    {"user": "readonly-auditor", "PasswordEnabled": "false", "AccessKey1Active": "true", "AccessKey1LastRotated": "2026-06-15T14:00:00Z", "MfaActive": "false"}
+  ],
+
+  "iam_policies": [
+    {"name": "sre-operator-policy", "arn": "arn:aws:iam::mock-acct-secure:policy/sre-operator", "has_admin_star": false, "attached_to": "sre-admin"},
+    {"name": "ci-cd-limited", "arn": "arn:aws:iam::mock-acct-secure:policy/ci-cd-limited", "has_admin_star": false, "attached_to": "ci-cd-bot"},
+    {"name": "readonly-policy", "arn": "arn:aws:iam::mock-acct-secure:policy/readonly", "has_admin_star": false, "attached_to": "readonly-auditor"}
+  ],
+
+  "s3_account_public_access_block": {
+    "BlockPublicAcls": true,
+    "IgnorePublicAcls": true,
+    "BlockPublicPolicy": true,
+    "RestrictPublicBuckets": true
+  },
+
+  "s3_buckets": [
+    {"name": "secure-app-data", "public_access": false, "default_encryption": true, "logging_enabled": true},
+    {"name": "cloudtrail-logs", "public_access": false, "default_encryption": true, "logging_enabled": true},
+    {"name": "cdn-assets", "public_access": false, "default_encryption": true, "logging_enabled": true}
+  ],
+
+  "security_groups": [
+    {"id": "sg-bastion", "name": "bastion-sg", "vpc_id": "vpc-main",
+     "inbound_rules": [
+       {"protocol": "tcp", "from_port": 22, "to_port": 22, "cidr": "203.0.113.0/24", "description": "SSH from corporate VPN only"}
+     ]},
+    {"id": "sg-app", "name": "app-sg", "vpc_id": "vpc-main",
+     "inbound_rules": [
+       {"protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "10.0.0.0/16", "description": "HTTPS internal only"},
+       {"protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "203.0.113.0/24", "description": "HTTPS from ALB"}
+     ]}
+  ],
+
+  "ec2_instances": [
+    {"id": "i-secureweb01", "name": "secure-web-server", "state": "running", "imdsv2_required": true,
+     "public_ip": null, "volumes": [{"id": "vol-secure-root01", "encrypted": true}]},
+    {"id": "i-securedb01", "name": "secure-db", "state": "running", "imdsv2_required": true,
+     "public_ip": null, "volumes": [{"id": "vol-secure-db-root", "encrypted": true}, {"id": "vol-secure-db-data", "encrypted": true}]}
+  ],
+
+  "ebs_encryption_by_default": true,
+
+  "cloudtrail_trails": [
+    {"name": "org-trail", "is_multi_region": true, "log_file_validation_enabled": true, "status": "LOGGING", "s3_bucket": "cloudtrail-logs"}
+  ],
+
+  "aws_config": {
+    "recording_enabled": true,
+    "config_recorders": [{"name": "default", "recording": true, "all_supported": true}]
+  },
+
+  "guardduty_detectors": [
+    {"id": "detector-us-east-1", "region": "us-east-1", "status": "ENABLED"}
+  ],
+
+  "vpcs": [
+    {"id": "vpc-main", "name": "main-production-vpc", "flow_logs_enabled": true, "cidr": "10.0.0.0/16"}
+  ],
+
+  "kms_keys": [
+    {"id": "key-app-prod", "alias": "alias/app-key-prod", "rotation_enabled": true, "key_manager": "CUSTOMER"}
+  ],
+
+  "rds_instances": [
+    {"id": "rds-prod-primary", "engine": "postgres", "storage_encrypted": true, "deletion_protection": true, "publicly_accessible": false}
+  ]
+}

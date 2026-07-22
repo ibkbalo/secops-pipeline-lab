@@ -1,0 +1,92 @@
+{
+  "_description": "Mock AWS account with MULTIPLE misconfigurations — simulates a neglected dev/test account.",
+  "_account_id": "mock-acct-123456789012",
+  "_region": "us-east-1",
+
+  "iam_account_summary": {
+    "AccountMFAEnabled": 0,
+    "MinimumPasswordLength": 8,
+    "RequireUppercaseCharacters": false,
+    "RequireLowercaseCharacters": true,
+    "RequireNumbers": true,
+    "RequireSymbols": false,
+    "HardExpiry": false,
+    "MaxPasswordAge": 0,
+    "PasswordReusePrevention": 0
+  },
+
+  "iam_credential_report": [
+    {"user": "admin-john", "PasswordEnabled": "true", "AccessKey1Active": "true", "AccessKey1LastRotated": "2024-01-15T12:00:00Z", "MfaActive": "false"},
+    {"user": "deploy-bot", "PasswordEnabled": "false", "AccessKey1Active": "true", "AccessKey1LastRotated": "2023-06-01T08:00:00Z", "MfaActive": "false"},
+    {"user": "readonly-svc", "PasswordEnabled": "true", "AccessKey1Active": "false", "MfaActive": "true"}
+  ],
+
+  "iam_policies": [
+    {"name": "admin-full-access", "arn": "arn:aws:iam::mock-acct:policy/admin-full-access", "has_admin_star": true, "attached_to": "admin-john"},
+    {"name": "deploy-bot-policy", "arn": "arn:aws:iam::mock-acct:policy/deploy-bot-policy", "has_admin_star": false, "attached_to": "deploy-bot"},
+    {"name": "read-only", "arn": "arn:aws:iam::mock-acct:policy/read-only", "has_admin_star": false, "attached_to": "readonly-svc"}
+  ],
+
+  "s3_account_public_access_block": {
+    "BlockPublicAcls": false,
+    "IgnorePublicAcls": false,
+    "BlockPublicPolicy": false,
+    "RestrictPublicBuckets": false
+  },
+
+  "s3_buckets": [
+    {"name": "customer-data-backup", "public_access": true, "default_encryption": false, "logging_enabled": false},
+    {"name": "app-logs", "public_access": false, "default_encryption": true, "logging_enabled": true},
+    {"name": "website-assets", "public_access": true, "default_encryption": false, "logging_enabled": false}
+  ],
+
+  "security_groups": [
+    {"id": "sg-open-ssh", "name": "allow-ssh-from-anywhere", "vpc_id": "vpc-main",
+     "inbound_rules": [
+       {"protocol": "tcp", "from_port": 22, "to_port": 22, "cidr": "0.0.0.0/0", "description": "SSH from anywhere — BAD"},
+       {"protocol": "tcp", "from_port": 80, "to_port": 80, "cidr": "0.0.0.0/0", "description": "HTTP"}
+     ]},
+    {"id": "sg-open-rdp", "name": "allow-rdp-from-anywhere", "vpc_id": "vpc-main",
+     "inbound_rules": [
+       {"protocol": "tcp", "from_port": 3389, "to_port": 3389, "cidr": "0.0.0.0/0", "description": "RDP from anywhere — BAD"},
+       {"protocol": "tcp", "from_port": 5985, "to_port": 5986, "cidr": "0.0.0.0/0", "description": "WinRM"}
+     ]},
+    {"id": "sg-restricted-app", "name": "restricted-app-sg", "vpc_id": "vpc-main",
+     "inbound_rules": [
+       {"protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "10.0.0.0/16", "description": "HTTPS from internal"},
+       {"protocol": "tcp", "from_port": 8080, "to_port": 8080, "cidr": "10.0.0.0/16", "description": "App internal"}
+     ]}
+  ],
+
+  "ec2_instances": [
+    {"id": "i-vulnweb01", "name": "vulnerable-web-server", "state": "running", "imdsv2_required": false,
+     "public_ip": "54.1.2.3", "volumes": [{"id": "vol-web01-root", "encrypted": false}]},
+    {"id": "i-vulndb01", "name": "database-server", "state": "running", "imdsv2_required": false,
+     "public_ip": "54.1.2.4", "volumes": [{"id": "vol-db01-root", "encrypted": false}, {"id": "vol-db01-data", "encrypted": false}]}
+  ],
+
+  "ebs_encryption_by_default": false,
+
+  "cloudtrail_trails": [
+    {"name": "management-events", "is_multi_region": false, "log_file_validation_enabled": false, "status": "LOGGING"}
+  ],
+
+  "aws_config": {
+    "recording_enabled": false,
+    "config_recorders": []
+  },
+
+  "guardduty_detectors": [],
+
+  "vpcs": [
+    {"id": "vpc-main", "name": "main-vpc", "flow_logs_enabled": false, "cidr": "10.0.0.0/16"}
+  ],
+
+  "kms_keys": [
+    {"id": "key-app", "alias": "alias/app-key", "rotation_enabled": false, "key_manager": "CUSTOMER"}
+  ],
+
+  "rds_instances": [
+    {"id": "rds-prod-db", "engine": "postgres", "storage_encrypted": false, "deletion_protection": false, "publicly_accessible": true}
+  ]
+}
