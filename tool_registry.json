@@ -1,0 +1,126 @@
+{
+  "registry_version": "1.0.0",
+  "updated_at": "2026-07-24T13:30:00Z",
+  "sentinel": "sentinel_stacks",
+  "description": "Sentinel Stacks product module registry. Each entry is importable as run(params) and emits TOOL_STANDARDS.md v1.0 JSON.",
+  "modules": [
+    {
+      "tool_id": "scan_public_url_network_auditor",
+      "version": "1.0.0",
+      "module_file": "ai_network_auditor.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "network-security",
+      "subdomain": "perimeter/network-audit",
+      "tier": 1,
+      "tags": ["network", "ports", "tls", "dns", "reconnaissance"],
+      "params": { "target": "public URL or IP", "timeout": 60 }
+    },
+    {
+      "tool_id": "scan_public_url_data_scout",
+      "version": "1.0.0",
+      "module_file": "ai_data_scout.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "data-security",
+      "subdomain": "perimeter/data-exposure",
+      "tier": 1,
+      "tags": ["data-leak", "s3", "git", "env", "pii"],
+      "params": { "target": "public URL or IP", "timeout": 60 }
+    },
+    {
+      "tool_id": "scan_public_url_api_scout",
+      "version": "1.0.5",
+      "module_file": "ai_api_scout.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "api-security",
+      "subdomain": "perimeter/api-audit",
+      "tier": 1,
+      "tags": ["api", "openapi", "auth", "endpoints"],
+      "params": { "target": "public URL or IP", "timeout": 60 }
+    },
+    {
+      "tool_id": "scan_vuln_hunter",
+      "version": "1.0.2",
+      "module_file": "ai_vuln_hunter.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "appsec",
+      "subdomain": "perimeter/owasp-top10",
+      "tier": 1,
+      "tags": ["owasp", "headers", "ssl", "vulnerabilities"],
+      "params": { "target": "public URL or IP", "timeout": 120 }
+    },
+    {
+      "tool_id": "scan_identity_guard",
+      "version": "1.0.0",
+      "module_file": "ai_identity_guard.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "identity",
+      "subdomain": "perimeter/identity-audit",
+      "tier": 1,
+      "tags": ["sso", "mfa", "session", "identity"],
+      "params": { "target": "public URL or IP", "timeout": 60 }
+    },
+    {
+      "tool_id": "scan_governance_mapper",
+      "version": "1.0.0",
+      "module_file": "ai_governance_mapper.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "governance",
+      "subdomain": "perimeter/governance-audit",
+      "tier": 1,
+      "tags": ["compliance", "headers", "governance", "policy"],
+      "params": { "target": "public URL or IP", "timeout": 60 }
+    },
+    {
+      "tool_id": "scan_infra_auditor_aws",
+      "version": "1.0.0",
+      "module_file": "ai_infra_auditor_aws.py",
+      "entry_point": "run",
+      "sentinel": "infrastructure",
+      "domain": "cloud-security",
+      "subdomain": "infrastructure/aws",
+      "tier": 1,
+      "tags": ["aws", "cloud", "cis", "iam", "s3", "ec2"],
+      "params": { "target": "AWS account/profile or mock JSON", "regions": ["us-east-1"], "timeout": 120 }
+    },
+    {
+      "tool_id": "scan_infra_auditor_azure",
+      "version": "1.0.0",
+      "module_file": "ai_infra_auditor_azure.py",
+      "entry_point": "run",
+      "sentinel": "infrastructure",
+      "domain": "cloud-security",
+      "subdomain": "infrastructure/azure",
+      "tier": 1,
+      "tags": ["azure", "cloud", "cis", "storage", "keyvault"],
+      "params": { "target": "Azure subscription or mock JSON", "timeout": 120 }
+    },
+    {
+      "tool_id": "remediate_findings_hardening_kit",
+      "version": "1.0.0",
+      "module_file": "ai_remediation_engine.py",
+      "entry_point": "run",
+      "sentinel": "remediation",
+      "domain": "governance",
+      "subdomain": "remediation/hardening-kit",
+      "tier": 2,
+      "tags": ["remediation", "hardening-kit", "terraform", "yaml", "aws", "azure", "cis", "tier-2"],
+      "params": {
+        "target": "path to scanner JSON, or inline {scan_report|findings}",
+        "output_dir": "hardening_kits",
+        "dry_run": true,
+        "severity_threshold": "info"
+      },
+      "depends_on": [
+        "scan_infra_auditor_aws",
+        "scan_infra_auditor_azure",
+        "scan_governance_mapper"
+      ]
+    }
+  ]
+}
