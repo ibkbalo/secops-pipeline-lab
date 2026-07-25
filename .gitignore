@@ -6,5 +6,5 @@ test-results-azure-vulnerable.json
 
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 
