@@ -3,3 +3,8 @@ hardening_kits/
 test-results-aws-vulnerable.json
 test-results-azure-vulnerable.json
 
+
+__pycache__/
+*.py[cod]
+*.class
+
