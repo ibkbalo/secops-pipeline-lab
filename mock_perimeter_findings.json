@@ -1,0 +1,320 @@
+{
+  "tool_id": "scan_perimeter_synthetic",
+  "version": "1.0.0",
+  "execution": {
+    "timestamp": "2026-07-25T13:00:00Z",
+    "duration_seconds": 0.1,
+    "target": "https://example.invalid",
+    "status": "success",
+    "error": null
+  },
+  "summary": {
+    "total_findings": 12,
+    "critical": 3,
+    "high": 3,
+    "medium": 6,
+    "low": 0,
+    "info": 0
+  },
+  "findings": [
+    {
+      "id": "GOV-001",
+      "title": "TLS / HTTPS Enforcement \u2014 FAILED",
+      "severity": "critical",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic: TLS enforcement failed.",
+      "evidence": {
+        "check_id": "GOV-SSL",
+        "passed": false
+      },
+      "remediation": {
+        "steps": [
+          "Enable HTTPS"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": [
+        "NIST 800-53 SC-8"
+      ]
+    },
+    {
+      "id": "GOV-002",
+      "title": "HTTP Strict Transport Security (HSTS) \u2014 FAILED",
+      "severity": "medium",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic: HSTS missing.",
+      "evidence": {
+        "check_id": "GOV-HSTS",
+        "passed": false
+      },
+      "remediation": {
+        "steps": [
+          "Add HSTS header"
+        ],
+        "effort": "low",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "VULN-001",
+      "title": "Reflected XSS (Cross-Site Scripting)",
+      "severity": "high",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic XSS.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Encode output"
+        ],
+        "effort": "high",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": true
+      },
+      "compliance": [
+        "OWASP A03"
+      ]
+    },
+    {
+      "id": "VULN-002",
+      "title": "SQL Injection \u2014 database error exposed",
+      "severity": "critical",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic SQLi.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Parameterized queries"
+        ],
+        "effort": "high",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": true
+      },
+      "compliance": [
+        "OWASP A03"
+      ]
+    },
+    {
+      "id": "VULN-003",
+      "title": "Missing Content-Security-Policy",
+      "severity": "medium",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic CSP.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Add CSP"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "VULN-004",
+      "title": "Open Redirect vulnerability",
+      "severity": "medium",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic open redirect.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Allowlist redirects"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "IDENT-001",
+      "title": "Insecure session cookie: sessionid",
+      "severity": "medium",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic cookie flags.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Secure; HttpOnly; SameSite"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "IDENT-002",
+      "title": "Login form without CSRF protection detected",
+      "severity": "medium",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic CSRF.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "CSRF tokens"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "IDENT-003",
+      "title": "JWT missing exp claim",
+      "severity": "high",
+      "confidence": "medium",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic JWT.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Add exp"
+        ],
+        "effort": "high",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": true
+      },
+      "compliance": []
+    },
+    {
+      "id": "FIND-001",
+      "title": "Swagger/OpenAPI spec exposed",
+      "severity": "medium",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic swagger.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Auth gate swagger"
+        ],
+        "effort": "medium",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": false
+      },
+      "compliance": []
+    },
+    {
+      "id": "FIND-002",
+      "title": "Environment file exposed via API path",
+      "severity": "critical",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic .env.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "Block .env"
+        ],
+        "effort": "high",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": true
+      },
+      "compliance": []
+    },
+    {
+      "id": "FIND-003",
+      "title": "Admin panel publicly accessible",
+      "severity": "high",
+      "confidence": "high",
+      "resource": {
+        "type": "public_url",
+        "id": "https://example.invalid",
+        "region": "global"
+      },
+      "description": "Synthetic admin.",
+      "evidence": {},
+      "remediation": {
+        "steps": [
+          "VPN or SSO"
+        ],
+        "effort": "high",
+        "tier": 1,
+        "reversible": true,
+        "requires_approval": true
+      },
+      "compliance": []
+    }
+  ],
+  "metadata": {
+    "domain": "appsec",
+    "subdomain": "perimeter/synthetic",
+    "sentinel": "perimeter",
+    "tier": 1,
+    "tags": [
+      "synthetic",
+      "perimeter"
+    ],
+    "llm_summary": "Synthetic Perimeter pack for FIX_MAP validation (GOV/VULN/IDENT/FIND). Not a live scan."
+  }
+}
