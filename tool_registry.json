@@ -1,6 +1,6 @@
 {
   "registry_version": "1.0.0",
-  "updated_at": "2026-07-25T13:30:00Z",
+  "updated_at": "2026-07-27T20:54:30Z",
   "sentinel": "sentinel_stacks",
   "description": "Sentinel Stacks product module registry. Each entry is importable as run(params) and emits TOOL_STANDARDS.md v1.0 JSON.",
   "modules": [
@@ -205,6 +205,51 @@
         "scan_infra_auditor_azure",
         "scan_governance_mapper"
       ]
+    },
+    {
+      "tool_id": "scan_devsecops_pack",
+      "version": "0.1.0-d1",
+      "module_file": "ai_devsecops_pack.py",
+      "entry_point": "run",
+      "sentinel": "infrastructure",
+      "domain": "devsecops",
+      "subdomain": "devsecops/pack",
+      "tier": 1,
+      "role": "devsecops",
+      "tags": [
+        "devsecops",
+        "multi-engine",
+        "cicd",
+        "secrets",
+        "sca",
+        "container",
+        "iac",
+        "supply-chain",
+        "trivy",
+        "gitleaks",
+        "enterprise",
+        "d1-skeleton"
+      ],
+      "params": {
+        "target": "repo path, label, or fixture JSON",
+        "mock_file": "optional offline multi-engine fixture",
+        "engines": "optional subset list of engine keys",
+        "timeout": 300
+      },
+      "engines": [
+        "secrets",
+        "sca",
+        "container",
+        "iac",
+        "sast",
+        "cicd",
+        "supply_chain",
+        "policy",
+        "repo_gov",
+        "release"
+      ],
+      "pack_phase": "D1",
+      "depends_on": []
     }
   ]
 }

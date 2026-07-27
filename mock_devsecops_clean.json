@@ -1,0 +1,130 @@
+{
+  "_devsecops_fixture": true,
+  "_profile": "clean",
+  "_description": "Enterprise DevSecOps multi-engine OFFLINE fixture — clean/hardened profile. Engines (when active) should emit 0 findings and high domain scores.",
+  "_schema_version": "1.0.0",
+  "repo": {
+    "name": "enterprise-app-hardened",
+    "default_branch": "main",
+    "visibility": "private",
+    "languages": ["python", "typescript", "terraform"]
+  },
+  "secrets": {
+    "gitleaks_findings": [],
+    "tracked_files_with_secrets": [],
+    "ci_env_plaintext": [],
+    "secret_scanning_enabled": true,
+    "history_scan_required": true
+  },
+  "sca": {
+    "manifests": [
+      {
+        "path": "requirements.txt",
+        "lockfile": "requirements.lock",
+        "packages": [
+          {"name": "django", "version": "5.0.7"},
+          {"name": "requests", "version": "2.32.3"}
+        ]
+      },
+      {
+        "path": "package.json",
+        "lockfile": "package-lock.json",
+        "packages": [
+          {"name": "lodash", "version": "4.17.21"}
+        ]
+      }
+    ],
+    "cves": [],
+    "dependabot_enabled": true,
+    "license_risks": []
+  },
+  "container": {
+    "dockerfiles": [
+      {
+        "path": "Dockerfile",
+        "base_image": "node:20.11.1-alpine@sha256:deadbeefdemo000000000000000000000000000000000000000000000000",
+        "user": "node",
+        "runs_as_root": false,
+        "secrets_in_layers": false,
+        "healthcheck": true
+      }
+    ],
+    "images": [
+      {
+        "name": "enterprise-app:1.4.2",
+        "os_vulns_critical": 0,
+        "os_vulns_high": 0,
+        "fixed_available": false
+      }
+    ]
+  },
+  "iac": {
+    "terraform": [
+      {
+        "path": "infra/main.tf",
+        "issues": []
+      }
+    ],
+    "kubernetes": [
+      {
+        "path": "k8s/deploy.yaml",
+        "issues": []
+      }
+    ],
+    "helm": []
+  },
+  "sast": {
+    "issues": []
+  },
+  "cicd": {
+    "platform": "github_actions",
+    "workflows": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "on": ["pull_request", "push"],
+        "jobs": ["build", "test", "gitleaks", "trivy", "sast"],
+        "security_jobs": ["gitleaks", "trivy", "sast"],
+        "permissions": "contents: read",
+        "actions": [
+          {
+            "uses": "actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11",
+            "pinned_sha": true
+          }
+        ],
+        "dangerous_patterns": []
+      }
+    ],
+    "branch_protection": {
+      "main": {
+        "required_pull_request": true,
+        "required_status_checks": ["gitleaks", "trivy", "sast", "build"],
+        "require_codeowner_review": true,
+        "allow_force_push": false
+      }
+    }
+  },
+  "supply_chain": {
+    "sbom_published": true,
+    "signed_images": true,
+    "slsa_level": 2,
+    "dependency_review_on_pr": true,
+    "install_scripts": []
+  },
+  "policy": {
+    "opa_policies": ["policy/base.rego"],
+    "conftest_present": true,
+    "admission_controls": true
+  },
+  "repo_gov": {
+    "codeowners": "CODEOWNERS",
+    "security_md": true,
+    "required_reviewers_for": [".github/", "infra/", "k8s/"],
+    "default_workflow_permissions": "read"
+  },
+  "release": {
+    "artifact_retention_days": 90,
+    "provenance_attestations": true,
+    "environment_protection_rules": true,
+    "production_manual_approval": true
+  }
+}
