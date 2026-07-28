@@ -1,13 +1,17 @@
 {
   "_devsecops_fixture": true,
   "_profile": "clean",
-  "_description": "Enterprise DevSecOps multi-engine OFFLINE fixture — clean/hardened profile. Engines (when active) should emit 0 findings and high domain scores.",
+  "_description": "Enterprise DevSecOps multi-engine OFFLINE fixture \u2014 clean/hardened profile. Engines (when active) should emit 0 findings and high domain scores.",
   "_schema_version": "1.0.0",
   "repo": {
     "name": "enterprise-app-hardened",
     "default_branch": "main",
     "visibility": "private",
-    "languages": ["python", "typescript", "terraform"]
+    "languages": [
+      "python",
+      "typescript",
+      "terraform"
+    ]
   },
   "secrets": {
     "gitleaks_findings": [],
@@ -22,15 +26,24 @@
         "path": "requirements.txt",
         "lockfile": "requirements.lock",
         "packages": [
-          {"name": "django", "version": "5.0.7"},
-          {"name": "requests", "version": "2.32.3"}
+          {
+            "name": "django",
+            "version": "5.0.7"
+          },
+          {
+            "name": "requests",
+            "version": "2.32.3"
+          }
         ]
       },
       {
         "path": "package.json",
         "lockfile": "package-lock.json",
         "packages": [
-          {"name": "lodash", "version": "4.17.21"}
+          {
+            "name": "lodash",
+            "version": "4.17.21"
+          }
         ]
       }
     ],
@@ -71,7 +84,8 @@
         "issues": []
       }
     ],
-    "helm": []
+    "helm": [],
+    "iac_scanning_enabled": true
   },
   "sast": {
     "issues": []
@@ -81,9 +95,22 @@
     "workflows": [
       {
         "path": ".github/workflows/ci.yml",
-        "on": ["pull_request", "push"],
-        "jobs": ["build", "test", "gitleaks", "trivy", "sast"],
-        "security_jobs": ["gitleaks", "trivy", "sast"],
+        "on": [
+          "pull_request",
+          "push"
+        ],
+        "jobs": [
+          "build",
+          "test",
+          "gitleaks",
+          "trivy",
+          "sast"
+        ],
+        "security_jobs": [
+          "gitleaks",
+          "trivy",
+          "sast"
+        ],
         "permissions": "contents: read",
         "actions": [
           {
@@ -97,7 +124,12 @@
     "branch_protection": {
       "main": {
         "required_pull_request": true,
-        "required_status_checks": ["gitleaks", "trivy", "sast", "build"],
+        "required_status_checks": [
+          "gitleaks",
+          "trivy",
+          "sast",
+          "build"
+        ],
         "require_codeowner_review": true,
         "allow_force_push": false
       }
@@ -111,14 +143,22 @@
     "install_scripts": []
   },
   "policy": {
-    "opa_policies": ["policy/base.rego"],
+    "opa_policies": [
+      "policy/base.rego"
+    ],
     "conftest_present": true,
-    "admission_controls": true
+    "admission_controls": true,
+    "policy_as_code_required": true,
+    "violations": []
   },
   "repo_gov": {
     "codeowners": "CODEOWNERS",
     "security_md": true,
-    "required_reviewers_for": [".github/", "infra/", "k8s/"],
+    "required_reviewers_for": [
+      ".github/",
+      "infra/",
+      "k8s/"
+    ],
     "default_workflow_permissions": "read"
   },
   "release": {

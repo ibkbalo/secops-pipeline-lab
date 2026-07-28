@@ -208,7 +208,7 @@
     },
     {
       "tool_id": "scan_devsecops_pack",
-      "version": "0.3.0-d3",
+      "version": "0.4.0-d4",
       "module_file": "ai_devsecops_pack.py",
       "entry_point": "run",
       "sentinel": "infrastructure",
@@ -228,7 +228,7 @@
         "trivy",
         "gitleaks",
         "enterprise",
-        "d3-sca-container"
+        "d4-iac-policy"
       ],
       "params": {
         "target": "repo path, label, or fixture JSON",
@@ -248,24 +248,26 @@
         "repo_gov",
         "release"
       ],
-      "pack_phase": "D3",
+      "pack_phase": "D4",
       "depends_on": [],
       "active_engines": [
         "secrets",
         "cicd",
         "sca",
-        "container"
+        "container",
+        "iac",
+        "policy"
       ],
-      "description": "Enterprise DevSecOps multi-engine pack \u2014 D3 Secrets+CI/CD+SCA+Container active; 6 engines remain stub (IaC/policy next).",
+      "description": "Enterprise DevSecOps multi-engine pack \u2014 D4 Secrets+CI/CD+SCA+Container+IaC+Policy active; 4 engines remain stub (supply/release/repo_gov/sast next).",
       "engines_status": {
         "secrets": "active",
         "cicd": "active",
         "sca": "active",
         "container": "active",
-        "iac": "stub",
+        "iac": "active",
+        "policy": "active",
         "sast": "stub",
         "supply_chain": "stub",
-        "policy": "stub",
         "repo_gov": "stub",
         "release": "stub"
       }

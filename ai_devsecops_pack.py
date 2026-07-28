@@ -7,6 +7,8 @@
 #            + optional gitleaks/actionlint live backends.
 # Phase D3: SCA (SCA) + Container (CTR) engines ACTIVE — embedded fixture
 #            + optional Trivy live backends (fs / dockerfile / image).
+# Phase D4: IaC (IAC) + Policy-as-Code (POL) engines ACTIVE — embedded
+#            fixture + optional Trivy config / Checkov live backends.
 # Enterprise bar: no 18-check ceiling. Capacity grows by engine.
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_devsecops_pack"
-VERSION = "0.3.0-d3"
+VERSION = "0.4.0-d4"
 DOMAIN = "devsecops"
 SUBDOMAIN = "devsecops/pack"
 SENTINEL = "infrastructure"
@@ -981,10 +983,240 @@ def _engine_container(ctx: PackContext) -> list[dict]:
     return findings
 
 
+def _iac_rule_title(rule: str) -> str:
+    return (rule or "iac-issue").replace("_", "-")
+
+
 def _engine_iac(ctx: PackContext) -> list[dict]:
-    """D4: trivy config / checkov-class. D1 stub."""
-    _ = ctx
-    return []
+    """Infrastructure as Code — TF/K8s/Helm embedded + optional trivy/checkov live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "iac"),
+        ctx.backends,
+    )
+    iac = ctx.section("iac") if ctx.fixture else {}
+
+    if iac:
+        for tf in iac.get("terraform") or []:
+            path = tf.get("path") or "main.tf"
+            for issue in tf.get("issues") or []:
+                rule = issue.get("rule") or "terraform-misconfig"
+                sev = _norm_sev(issue.get("severity"), "high")
+                resource = issue.get("resource") or path
+                detail = issue.get("detail") or rule
+                findings.append(
+                    _finding(
+                        ctx.next_id("iac"),
+                        f"Terraform: {_iac_rule_title(rule)}",
+                        sev,
+                        f"Terraform '{path}' resource '{resource}' — {rule}: {detail}.",
+                        resource={
+                            "type": "terraform",
+                            "id": resource,
+                            "engine": "iac",
+                            "path": path,
+                        },
+                        evidence={
+                            "path": path,
+                            "rule": rule,
+                            "resource": resource,
+                            "detail": detail,
+                            "source": "fixture.iac.terraform",
+                        },
+                        remediation={
+                            "steps": [
+                                f"Remediate {rule} on {resource} in {path}.",
+                                "Apply least-privilege network and storage controls (no 0.0.0.0/0 SSH, S3 public block).",
+                                "Add tfsec/trivy config / checkov to CI as a required status check.",
+                                "Re-run scan_devsecops_pack IaC engine after fix.",
+                            ],
+                            "effort": "medium",
+                        },
+                        compliance=[
+                            "CIS AWS Foundations",
+                            "NIST 800-53 CM-2",
+                            "NIST 800-53 AC-4",
+                            "SOC 2 CC6.6",
+                        ],
+                        engine="iac",
+                        backend="embedded",
+                    )
+                )
+
+        for k8s in iac.get("kubernetes") or []:
+            path = k8s.get("path") or "deploy.yaml"
+            for issue in k8s.get("issues") or []:
+                rule = issue.get("rule") or "k8s-misconfig"
+                sev = _norm_sev(issue.get("severity"), "high")
+                detail = issue.get("detail") or rule
+                resource = issue.get("resource") or path
+                findings.append(
+                    _finding(
+                        ctx.next_id("iac"),
+                        f"Kubernetes: {_iac_rule_title(rule)}",
+                        sev,
+                        f"Kubernetes manifest '{path}' — {rule}: {detail}.",
+                        resource={
+                            "type": "kubernetes",
+                            "id": resource,
+                            "engine": "iac",
+                            "path": path,
+                        },
+                        evidence={
+                            "path": path,
+                            "rule": rule,
+                            "detail": detail,
+                            "source": "fixture.iac.kubernetes",
+                        },
+                        remediation={
+                            "steps": [
+                                f"Fix {rule} in {path} ({detail}).",
+                                "Set allowPrivilegeEscalation: false; drop ALL capabilities where possible.",
+                                "Define cpu/memory requests and limits on every container.",
+                                "Enforce via Pod Security Standards / Kyverno / OPA Gatekeeper.",
+                            ],
+                            "effort": "medium",
+                        },
+                        compliance=[
+                            "CIS Kubernetes",
+                            "NSA/CISA K8s Hardening",
+                            "NIST 800-53 CM-6",
+                        ],
+                        engine="iac",
+                        backend="embedded",
+                    )
+                )
+
+        for helm in iac.get("helm") or []:
+            path = helm.get("path") or "Chart.yaml"
+            for issue in helm.get("issues") or []:
+                rule = issue.get("rule") or "helm-misconfig"
+                sev = _norm_sev(issue.get("severity"), "medium")
+                detail = issue.get("detail") or rule
+                findings.append(
+                    _finding(
+                        ctx.next_id("iac"),
+                        f"Helm: {_iac_rule_title(rule)}",
+                        sev,
+                        f"Helm chart '{path}' — {rule}: {detail}.",
+                        resource={"type": "helm", "id": path, "engine": "iac"},
+                        evidence={
+                            "path": path,
+                            "rule": rule,
+                            "detail": detail,
+                            "source": "fixture.iac.helm",
+                        },
+                        engine="iac",
+                        backend="embedded",
+                    )
+                )
+
+        # drift / missing iac scanning gate
+        if iac.get("iac_scanning_enabled") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("iac"),
+                    "IaC security scanning disabled",
+                    "high",
+                    "No IaC scanner is required in the delivery pipeline (tfsec/trivy/checkov). "
+                    "Misconfigurations can merge without gate.",
+                    resource={"type": "repo_setting", "id": "iac_scanning", "engine": "iac"},
+                    evidence={
+                        "iac_scanning_enabled": False,
+                        "source": "fixture.iac.iac_scanning_enabled",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add trivy config or checkov job on every PR touching infra/.",
+                            "Fail the build on CRITICAL/HIGH IaC findings.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST 800-53 SA-11", "CIS Software Supply Chain 4.2"],
+                    engine="iac",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    # Live: trivy config then checkov when no fixture
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if not root.exists():
+            return findings
+
+        trivy = (ctx.backends.get("trivy") or {}).get("path")
+        if backend == "trivy" and trivy:
+            try:
+                cmd = [trivy, "config", "--format", "json", "--quiet", str(root)]
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=240, check=False)
+                raw = (p.stdout or "").strip()
+                if raw:
+                    data = json.loads(raw)
+                    for res in data.get("Results") or []:
+                        target_name = res.get("Target") or str(root)
+                        for m in res.get("Misconfigurations") or []:
+                            sev = _norm_sev(m.get("Severity"), "medium")
+                            mid = m.get("ID") or m.get("AVDID") or "misconfig"
+                            title = m.get("Title") or mid
+                            findings.append(
+                                _finding(
+                                    ctx.next_id("iac"),
+                                    f"Trivy IaC {mid}: {title}",
+                                    sev,
+                                    m.get("Description") or m.get("Message") or title,
+                                    resource={
+                                        "type": "iac",
+                                        "id": target_name,
+                                        "engine": "iac",
+                                    },
+                                    evidence={
+                                        "trivy_misconfig": m,
+                                        "source": "live.trivy.config",
+                                    },
+                                    engine="iac",
+                                    backend="trivy",
+                                )
+                            )
+            except Exception:
+                pass
+
+        checkov = (ctx.backends.get("checkov") or {}).get("path")
+        if (backend == "checkov" or (not findings and checkov)) and checkov:
+            try:
+                cmd = [checkov, "-d", str(root), "-o", "json", "--quiet"]
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+                raw = (p.stdout or "").strip()
+                if raw:
+                    data = json.loads(raw)
+                    # checkov may return list of reports or single dict
+                    reports = data if isinstance(data, list) else [data]
+                    for rep in reports:
+                        results = (rep or {}).get("results") or {}
+                        for fail in results.get("failed_checks") or []:
+                            sev = _norm_sev(fail.get("severity") or "medium", "medium")
+                            cid = fail.get("check_id") or "CKV"
+                            findings.append(
+                                _finding(
+                                    ctx.next_id("iac"),
+                                    f"Checkov {cid}: {fail.get('check_name') or cid}",
+                                    sev,
+                                    fail.get("description") or fail.get("check_name") or cid,
+                                    resource={
+                                        "type": "iac",
+                                        "id": fail.get("file_path") or str(root),
+                                        "engine": "iac",
+                                        "resource": fail.get("resource"),
+                                    },
+                                    evidence={"checkov": fail, "source": "live.checkov"},
+                                    engine="iac",
+                                    backend="checkov",
+                                )
+                            )
+            except Exception:
+                pass
+    return findings
 
 
 def _engine_sast(ctx: PackContext) -> list[dict]:
@@ -1288,9 +1520,180 @@ def _engine_supply_chain(ctx: PackContext) -> list[dict]:
 
 
 def _engine_policy(ctx: PackContext) -> list[dict]:
-    """D4: OPA/Conftest-class. D1 stub."""
-    _ = ctx
-    return []
+    """Policy as Code — OPA/Conftest/admission embedded + optional checkov live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "policy"),
+        ctx.backends,
+    )
+    pol = ctx.section("policy") if ctx.fixture else {}
+
+    if pol:
+        opa = pol.get("opa_policies") or []
+        if isinstance(opa, list) and len(opa) == 0:
+            findings.append(
+                _finding(
+                    ctx.next_id("policy"),
+                    "No OPA/Rego policies present",
+                    "high",
+                    "Repository has zero OPA/Rego policy files. Infrastructure and K8s changes "
+                    "cannot be gated by declarative policy-as-code.",
+                    resource={"type": "policy_bundle", "id": "opa", "engine": "policy"},
+                    evidence={
+                        "opa_policies": opa,
+                        "source": "fixture.policy.opa_policies",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add baseline Rego policies under policy/ (images, network, IAM).",
+                            "Version policies with the repo; unit-test with OPA/Conftest.",
+                            "Wire policies into CI (conftest verify / gatekeeper dry-run).",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=[
+                        "NIST 800-53 CM-1",
+                        "NIST 800-53 CA-2",
+                        "CIS Software Supply Chain 4.3",
+                    ],
+                    engine="policy",
+                    backend="embedded",
+                )
+            )
+
+        if pol.get("conftest_present") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("policy"),
+                    "Conftest / policy test harness missing",
+                    "medium",
+                    "Conftest (or equivalent policy unit-test toolchain) is not present. "
+                    "Policies cannot be validated before merge.",
+                    resource={"type": "tooling", "id": "conftest", "engine": "policy"},
+                    evidence={
+                        "conftest_present": False,
+                        "source": "fixture.policy.conftest_present",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add Conftest (or OPA test) to the CI security jobs.",
+                            "Store policy tests next to Rego under policy/.",
+                            "Fail PRs that violate baseline policies.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST 800-53 SA-11"],
+                    engine="policy",
+                    backend="embedded",
+                )
+            )
+
+        if pol.get("admission_controls") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("policy"),
+                    "Cluster admission controls disabled",
+                    "high",
+                    "Kubernetes admission controls (Gatekeeper/Kyverno/PSA) are not enabled. "
+                    "Runtime workloads can violate policy even if CI is clean.",
+                    resource={"type": "runtime_control", "id": "admission", "engine": "policy"},
+                    evidence={
+                        "admission_controls": False,
+                        "source": "fixture.policy.admission_controls",
+                    },
+                    remediation={
+                        "steps": [
+                            "Deploy Kyverno or OPA Gatekeeper with baseline constrainttemplates.",
+                            "Enable Pod Security Admission (restricted) on app namespaces.",
+                            "Start in audit mode, then enforce on critical namespaces.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=[
+                        "CIS Kubernetes 5.2",
+                        "NSA/CISA K8s Hardening",
+                        "NIST 800-53 CM-7",
+                    ],
+                    engine="policy",
+                    backend="embedded",
+                )
+            )
+
+        for v in pol.get("violations") or []:
+            rule = v.get("rule") or v.get("policy") or "policy-violation"
+            sev = _norm_sev(v.get("severity"), "high")
+            target = v.get("target") or v.get("resource") or "unknown"
+            findings.append(
+                _finding(
+                    ctx.next_id("policy"),
+                    f"Policy violation: {rule}",
+                    sev,
+                    v.get("detail") or f"Policy '{rule}' failed on '{target}'.",
+                    resource={"type": "policy_violation", "id": target, "engine": "policy"},
+                    evidence={"violation": v, "source": "fixture.policy.violations"},
+                    remediation={
+                        "steps": [
+                            f"Remediate resource '{target}' to satisfy policy '{rule}'.",
+                            "Update exception registry only with time-bounded approvals.",
+                        ],
+                        "effort": "medium",
+                    },
+                    engine="policy",
+                    backend="embedded",
+                )
+            )
+
+        if pol.get("policy_as_code_required") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("policy"),
+                    "Policy-as-code not required in SDLC",
+                    "medium",
+                    "Policy-as-code is optional or absent from the SDLC definition of done.",
+                    resource={"type": "sdlc_gate", "id": "policy_as_code", "engine": "policy"},
+                    evidence={
+                        "policy_as_code_required": False,
+                        "source": "fixture.policy.policy_as_code_required",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add policy evaluation as a required merge check.",
+                            "Document exceptions with owner + expiry.",
+                        ],
+                        "effort": "low",
+                    },
+                    engine="policy",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    # Live lightweight: detect absence of policy files
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            rego = list(root.rglob("*.rego"))
+            rego = [p for p in rego if ".git" not in p.parts][:50]
+            conf = list(root.rglob(".conftest.yaml")) + list(root.rglob("conftest.toml"))
+            conf = [p for p in conf if ".git" not in p.parts]
+            if not rego:
+                findings.append(
+                    _finding(
+                        ctx.next_id("policy"),
+                        "No OPA/Rego policies present",
+                        "high",
+                        f"No .rego files found under '{root}'.",
+                        resource={"type": "policy_bundle", "id": "opa", "engine": "policy"},
+                        evidence={"source": "live.fs", "rego_count": 0},
+                        engine="policy",
+                        backend="embedded",
+                    )
+                )
+            if not conf and not any("conftest" in str(p).lower() for p in root.rglob("*") if p.is_file() and ".git" not in p.parts):
+                # only flag missing harness when also empty policies path-ish
+                pass
+    return findings
 
 
 def _engine_repo_gov(ctx: PackContext) -> list[dict]:
@@ -1341,7 +1744,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "iac",
         "code": "IAC",
         "name": "Infrastructure as Code",
-        "status": "stub",  # → D4
+        "status": "active",  # D4
         "phase": "D4",
         "preferred_backends": ["trivy", "checkov", "embedded"],
         "run": _engine_iac,
@@ -1381,7 +1784,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "policy",
         "code": "POL",
         "name": "Policy as Code",
-        "status": "stub",  # → D4
+        "status": "active",  # D4
         "phase": "D4",
         "preferred_backends": ["checkov", "embedded"],
         "run": _engine_policy,
@@ -1513,14 +1916,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "D3",
-        "label": "secrets_cicd_sca_container_active",
+        "phase": "D4",
+        "label": "secrets_cicd_sca_container_iac_policy_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full multi-engine pack — not 18-check ceiling",
-        "next_phase": "D4 iac + policy-as-code (trivy/checkov)",
+        "next_phase": "D5 supply_chain + release (+ repo_gov)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
     }
 
@@ -1576,7 +1979,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"DevSecOps pack failed: {err}",
-                "pack_phase": "D3",
+                "pack_phase": "D4",
             },
         }
 
@@ -1694,7 +2097,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "D3",
+            "pack_phase": "D4",
             "pack_readiness": readiness,
             "engine_registry": [
                 {

@@ -183,7 +183,8 @@
         ]
       }
     ],
-    "helm": []
+    "helm": [],
+    "iac_scanning_enabled": false
   },
   "sast": {
     "issues": [
@@ -280,7 +281,16 @@
   "policy": {
     "opa_policies": [],
     "conftest_present": false,
-    "admission_controls": false
+    "admission_controls": false,
+    "policy_as_code_required": false,
+    "violations": [
+      {
+        "rule": "deny-privileged-containers",
+        "severity": "high",
+        "target": "k8s/deploy.yaml",
+        "detail": "privileged container allowed by missing policy gate"
+      }
+    ]
   },
   "repo_gov": {
     "codeowners": null,
