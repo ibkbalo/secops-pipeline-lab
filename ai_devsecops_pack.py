@@ -5,11 +5,14 @@
 #            TOOL_STANDARDS merge, domain scoring shell.
 # Phase D2: Secrets (SEC) + CI/CD (CICD) engines ACTIVE — embedded fixture
 #            + optional gitleaks/actionlint live backends.
+# Phase D3: SCA (SCA) + Container (CTR) engines ACTIVE — embedded fixture
+#            + optional Trivy live backends (fs / dockerfile / image).
 # Enterprise bar: no 18-check ceiling. Capacity grows by engine.
 
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -19,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_devsecops_pack"
-VERSION = "0.2.0-d2"
+VERSION = "0.3.0-d3"
 DOMAIN = "devsecops"
 SUBDOMAIN = "devsecops/pack"
 SENTINEL = "infrastructure"
@@ -403,16 +406,579 @@ def _engine_secrets(ctx: PackContext) -> list[dict]:
     return findings
 
 
+def _norm_sev(sev: str | None, default: str = "high") -> str:
+    s = (sev or default).strip().lower()
+    if s in ("critical", "crit", "4"):
+        return "critical"
+    if s in ("high", "3"):
+        return "high"
+    if s in ("medium", "med", "moderate", "2"):
+        return "medium"
+    if s in ("low", "1"):
+        return "low"
+    if s in ("info", "informational", "unknown", "0"):
+        return "info"
+    return default
+
+
+def _floating_tag(image: str | None) -> bool:
+    if not image:
+        return False
+    img = image.strip()
+    if "@sha256:" in img:
+        return False
+    # untagged or :latest / :master / :main floating
+    if ":" not in img.split("/")[-1]:
+        return True
+    tag = img.rsplit(":", 1)[-1]
+    return tag.lower() in {"latest", "master", "main", "dev", "develop", "nightly", "stable"}
+
+
 def _engine_sca(ctx: PackContext) -> list[dict]:
-    """D3: trivy fs / OSV / lockfile. D1 stub."""
-    _ = ctx
-    return []
+    """Software composition analysis — embedded fixture + optional trivy fs live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "sca"),
+        ctx.backends,
+    )
+    sca = ctx.section("sca") if ctx.fixture else {}
+
+    if sca:
+        for cve in sca.get("cves") or []:
+            cid = cve.get("id") or "CVE-UNKNOWN"
+            pkg = cve.get("package") or "unknown"
+            ver = cve.get("version") or "?"
+            sev = _norm_sev(cve.get("severity"), "high")
+            title = cve.get("title") or f"{cid} in {pkg}"
+            findings.append(
+                _finding(
+                    ctx.next_id("sca"),
+                    f"{cid}: {title}",
+                    sev,
+                    f"Vulnerable dependency {pkg}@{ver} — {cid}: {title}. "
+                    f"Upgrade to a fixed release and pin via lockfile.",
+                    resource={
+                        "type": "package",
+                        "id": f"{pkg}@{ver}",
+                        "engine": "sca",
+                        "cve": cid,
+                    },
+                    evidence={
+                        "cve": cid,
+                        "package": pkg,
+                        "version": ver,
+                        "title": title,
+                        "source": "fixture.sca.cves",
+                    },
+                    remediation={
+                        "steps": [
+                            f"Upgrade {pkg} past the fixed version for {cid}.",
+                            "Regenerate lockfiles (requirements.lock / package-lock / poetry.lock).",
+                            "Re-run scan_devsecops_pack SCA (or trivy fs) to confirm.",
+                            "Enable Dependabot/Renovate for continuous upgrades.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=[
+                        "NIST 800-53 SA-11",
+                        "NIST 800-53 SI-2",
+                        "CIS Software Supply Chain 3.1",
+                        "SOC 2 CC7.1",
+                    ],
+                    engine="sca",
+                    backend="embedded",
+                )
+            )
+
+        for man in sca.get("manifests") or []:
+            mpath = man.get("path") or "manifest"
+            lock = man.get("lockfile")
+            pkgs = man.get("packages") or []
+            if not lock:
+                findings.append(
+                    _finding(
+                        ctx.next_id("sca"),
+                        f"Missing lockfile for {mpath}",
+                        "high",
+                        f"Dependency manifest '{mpath}' has no lockfile. Builds are non-reproducible "
+                        f"and SCA cannot pin exact resolved versions ({len(pkgs)} declared packages).",
+                        resource={"type": "manifest", "id": mpath, "engine": "sca"},
+                        evidence={
+                            "path": mpath,
+                            "lockfile": lock,
+                            "package_count": len(pkgs),
+                            "source": "fixture.sca.manifests",
+                        },
+                        remediation={
+                            "steps": [
+                                "Commit a generated lockfile (package-lock.json, poetry.lock, "
+                                "Pipfile.lock, go.sum, Cargo.lock, etc.).",
+                                "Install only from the lockfile in CI (npm ci / pip install -r lock).",
+                                "Block unlock changes without review.",
+                            ],
+                            "effort": "low",
+                        },
+                        compliance=["CIS Software Supply Chain 3.2", "SLSA L1+"],
+                        engine="sca",
+                        backend="embedded",
+                    )
+                )
+
+        if sca.get("dependabot_enabled") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("sca"),
+                    "Dependency update automation disabled",
+                    "medium",
+                    "Dependabot (or equivalent Renovate) is not enabled. Known CVEs will linger "
+                    "without automated PRs for vulnerable transitive deps.",
+                    resource={"type": "repo_setting", "id": "dependabot", "engine": "sca"},
+                    evidence={
+                        "dependabot_enabled": False,
+                        "source": "fixture.sca.dependabot_enabled",
+                    },
+                    remediation={
+                        "steps": [
+                            "Enable Dependabot or Renovate for ecosystems in this repo.",
+                            "Require security-update PRs to be reviewed weekly.",
+                            "Auto-merge patch-level security bumps where policy allows.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["CIS Software Supply Chain 3.3", "NIST 800-53 SI-2"],
+                    engine="sca",
+                    backend="embedded",
+                )
+            )
+
+        for lic in sca.get("license_risks") or []:
+            pkg = lic.get("package") or "unknown"
+            license_id = lic.get("license") or "UNKNOWN"
+            sev = _norm_sev(lic.get("severity"), "medium")
+            findings.append(
+                _finding(
+                    ctx.next_id("sca"),
+                    f"License risk: {pkg} ({license_id})",
+                    sev,
+                    f"Package {pkg} carries license '{license_id}' flagged as a policy risk.",
+                    resource={"type": "package", "id": pkg, "engine": "sca"},
+                    evidence={"license": lic, "source": "fixture.sca.license_risks"},
+                    engine="sca",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    # Live path: trivy fs when available and no fixture
+    if ctx.mode == "live" and backend == "trivy":
+        trivy = (ctx.backends.get("trivy") or {}).get("path")
+        target = Path(ctx.target)
+        if trivy and target.exists():
+            try:
+                cmd = [
+                    trivy,
+                    "fs",
+                    "--scanners",
+                    "vuln",
+                    "--format",
+                    "json",
+                    "--quiet",
+                    str(target),
+                ]
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+                raw = (p.stdout or "").strip()
+                if raw:
+                    data = json.loads(raw)
+                    for res in data.get("Results") or []:
+                        target_name = res.get("Target") or str(target)
+                        for v in res.get("Vulnerabilities") or []:
+                            cid = v.get("VulnerabilityID") or "CVE"
+                            pkg = v.get("PkgName") or "pkg"
+                            ver = v.get("InstalledVersion") or "?"
+                            sev = _norm_sev(v.get("Severity"), "medium")
+                            title = v.get("Title") or v.get("Description") or cid
+                            findings.append(
+                                _finding(
+                                    ctx.next_id("sca"),
+                                    f"{cid}: {pkg}@{ver}",
+                                    sev,
+                                    f"Trivy reported {cid} on {pkg}@{ver} in {target_name}: {title}",
+                                    resource={
+                                        "type": "package",
+                                        "id": f"{pkg}@{ver}",
+                                        "engine": "sca",
+                                        "cve": cid,
+                                    },
+                                    evidence={
+                                        "trivy": {
+                                            "VulnerabilityID": cid,
+                                            "PkgName": pkg,
+                                            "InstalledVersion": ver,
+                                            "FixedVersion": v.get("FixedVersion"),
+                                            "Severity": v.get("Severity"),
+                                            "Target": target_name,
+                                        },
+                                        "source": "live.trivy.fs",
+                                    },
+                                    engine="sca",
+                                    backend="trivy",
+                                )
+                            )
+            except Exception:
+                pass
+    return findings
 
 
 def _engine_container(ctx: PackContext) -> list[dict]:
-    """D3: trivy image + Dockerfile policy. D1 stub."""
-    _ = ctx
-    return []
+    """Container image & Dockerfile policy — embedded fixture + optional trivy live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "container"),
+        ctx.backends,
+    )
+    ctr = ctx.section("container") if ctx.fixture else {}
+
+    if ctr:
+        for df in ctr.get("dockerfiles") or []:
+            path = df.get("path") or "Dockerfile"
+            base = df.get("base_image") or ""
+            if _floating_tag(base):
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Floating/unpinned base image: {path}",
+                        "high",
+                        f"Dockerfile '{path}' uses base image '{base}' without immutable digest. "
+                        f"Floating tags break supply-chain integrity and can pull unexpected layers.",
+                        resource={"type": "dockerfile", "id": path, "engine": "container"},
+                        evidence={
+                            "path": path,
+                            "base_image": base,
+                            "source": "fixture.container.dockerfiles.base_image",
+                        },
+                        remediation={
+                            "steps": [
+                                "Pin base image to version tag AND sha256 digest.",
+                                "Prefer minimal distroless/alpine variants from trusted registries.",
+                                "Rebuild on a schedule and rescan with trivy image.",
+                            ],
+                            "effort": "medium",
+                        },
+                        compliance=[
+                            "CIS Docker 4.2",
+                            "NIST 800-53 CM-2",
+                            "CIS Software Supply Chain 3.4",
+                        ],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+            runs_root = df.get("runs_as_root") is True or (df.get("user") in (None, "", "root", "0"))
+            if runs_root:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Container runs as root: {path}",
+                        "critical",
+                        f"Dockerfile '{path}' runs as root "
+                        f"(user={df.get('user')!r}, runs_as_root={df.get('runs_as_root')}). "
+                        f"Compromise of the app becomes host-level privilege in many runtimes.",
+                        resource={"type": "dockerfile", "id": path, "engine": "container"},
+                        evidence={
+                            "path": path,
+                            "user": df.get("user"),
+                            "runs_as_root": df.get("runs_as_root"),
+                            "source": "fixture.container.dockerfiles.user",
+                        },
+                        remediation={
+                            "steps": [
+                                "Add a non-root USER before CMD/ENTRYPOINT.",
+                                "Set USER in the final stage of multi-stage builds.",
+                                "Enforce runAsNonRoot in Kubernetes PodSecurity / PSA.",
+                            ],
+                            "effort": "medium",
+                        },
+                        compliance=["CIS Docker 4.1", "NIST 800-53 AC-6", "NSA K8s Hardening"],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+            if df.get("secrets_in_layers") is True:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Secrets baked into image layers: {path}",
+                        "critical",
+                        f"Dockerfile '{path}' flags secrets_in_layers=true. Credentials in layers "
+                        f"persist even after later DELETE instructions.",
+                        resource={"type": "dockerfile", "id": path, "engine": "container"},
+                        evidence={
+                            "path": path,
+                            "secrets_in_layers": True,
+                            "source": "fixture.container.dockerfiles.secrets_in_layers",
+                        },
+                        remediation={
+                            "steps": [
+                                "Never COPY .env / keys into the image; inject at runtime via secrets.",
+                                "Use multi-stage builds and BuildKit --secret mounts.",
+                                "Scan historical tags; rotate any exposed credentials.",
+                            ],
+                            "effort": "high",
+                        },
+                        compliance=["CIS Docker 4.10", "NIST 800-53 IA-5"],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+            if df.get("healthcheck") is False:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Missing HEALTHCHECK: {path}",
+                        "medium",
+                        f"Dockerfile '{path}' has no HEALTHCHECK. Orchestrators and load balancers "
+                        f"cannot distinguish hung processes from healthy ones.",
+                        resource={"type": "dockerfile", "id": path, "engine": "container"},
+                        evidence={
+                            "path": path,
+                            "healthcheck": False,
+                            "source": "fixture.container.dockerfiles.healthcheck",
+                        },
+                        remediation={
+                            "steps": [
+                                "Add HEALTHCHECK with a realistic liveness command.",
+                                "Mirror probes in Kubernetes (liveness/readiness) if K8s is the runtime.",
+                            ],
+                            "effort": "low",
+                        },
+                        compliance=["CIS Docker 4.6"],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+            if df.get("add_all_context") is True:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Broad build context copy: {path}",
+                        "high",
+                        f"Dockerfile '{path}' copies the entire build context (ADD/COPY .). "
+                        f"Secrets, .git, and build tools may leak into the image.",
+                        resource={"type": "dockerfile", "id": path, "engine": "container"},
+                        evidence={
+                            "path": path,
+                            "add_all_context": True,
+                            "source": "fixture.container.dockerfiles.add_all_context",
+                        },
+                        remediation={
+                            "steps": [
+                                "COPY only required artifacts; use multi-stage builds.",
+                                "Add a tight .dockerignore (.git, .env, tests, docs).",
+                            ],
+                            "effort": "low",
+                        },
+                        compliance=["CIS Docker 4.7", "NIST 800-53 CM-7"],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+        for img in ctr.get("images") or []:
+            name = img.get("name") or "image:unknown"
+            crit = int(img.get("os_vulns_critical") or 0)
+            high = int(img.get("os_vulns_high") or 0)
+            fixed = img.get("fixed_available")
+            if crit > 0:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Image OS critical vulns ({crit}): {name}",
+                        "critical",
+                        f"Image '{name}' reports {crit} critical OS package vulnerabilities"
+                        f"{' with fixes available' if fixed else ''}. Rebuild from a patched base.",
+                        resource={"type": "image", "id": name, "engine": "container"},
+                        evidence={
+                            "image": name,
+                            "os_vulns_critical": crit,
+                            "os_vulns_high": high,
+                            "fixed_available": fixed,
+                            "source": "fixture.container.images",
+                        },
+                        remediation={
+                            "steps": [
+                                "Rebuild on a freshly patched base image.",
+                                "Run trivy image --severity CRITICAL,HIGH and fail the pipeline.",
+                                "Prefer distroless/minimal bases to shrink OS package surface.",
+                            ],
+                            "effort": "medium",
+                        },
+                        compliance=["CIS Docker 4.4", "NIST 800-53 SI-2"],
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+            elif high > 0:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Image OS high vulns ({high}): {name}",
+                        "high",
+                        f"Image '{name}' reports {high} high OS package vulnerabilities"
+                        f"{' with fixes available' if fixed else ''}.",
+                        resource={"type": "image", "id": name, "engine": "container"},
+                        evidence={
+                            "image": name,
+                            "os_vulns_high": high,
+                            "fixed_available": fixed,
+                            "source": "fixture.container.images",
+                        },
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+            # if both crit and high, still raise a high summary when crit already raised
+            if crit > 0 and high > 0:
+                findings.append(
+                    _finding(
+                        ctx.next_id("container"),
+                        f"Image OS high vulns ({high}): {name}",
+                        "high",
+                        f"Image '{name}' additionally reports {high} high-severity OS vulnerabilities "
+                        f"(critical={crit}).",
+                        resource={"type": "image", "id": name, "engine": "container"},
+                        evidence={
+                            "image": name,
+                            "os_vulns_critical": crit,
+                            "os_vulns_high": high,
+                            "fixed_available": fixed,
+                            "source": "fixture.container.images",
+                        },
+                        engine="container",
+                        backend="embedded",
+                    )
+                )
+
+        return findings
+
+    # Live Dockerfile heuristics when no fixture
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            dockerfiles = list(root.rglob("Dockerfile")) + list(root.rglob("Dockerfile.*"))
+            # cap walk noise
+            dockerfiles = [p for p in dockerfiles if ".git" not in p.parts][:40]
+            for dfp in dockerfiles:
+                try:
+                    content = dfp.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                rel = str(dfp.relative_to(root)) if dfp.is_relative_to(root) else str(dfp)
+                # FROM lines
+                for m in re.finditer(r"^\s*FROM\s+([^\s]+)", content, re.I | re.M):
+                    base = m.group(1)
+                    if base.upper().startswith("SCRATCH"):
+                        continue
+                    if _floating_tag(base):
+                        findings.append(
+                            _finding(
+                                ctx.next_id("container"),
+                                f"Floating/unpinned base image: {rel}",
+                                "high",
+                                f"Dockerfile '{rel}' FROM {base} is not digest-pinned.",
+                                resource={"type": "dockerfile", "id": rel, "engine": "container"},
+                                evidence={"path": rel, "base_image": base, "source": "live.dockerfile"},
+                                engine="container",
+                                backend="embedded",
+                            )
+                        )
+                user_matches = list(re.finditer(r"^\s*USER\s+([^\s]+)", content, re.I | re.M))
+                final_user = user_matches[-1].group(1) if user_matches else None
+                if final_user is None or final_user in ("root", "0"):
+                    findings.append(
+                        _finding(
+                            ctx.next_id("container"),
+                            f"Container runs as root: {rel}",
+                            "critical",
+                            f"Dockerfile '{rel}' final USER is {final_user!r}.",
+                            resource={"type": "dockerfile", "id": rel, "engine": "container"},
+                            evidence={"path": rel, "user": final_user, "source": "live.dockerfile"},
+                            engine="container",
+                            backend="embedded",
+                        )
+                    )
+                if not re.search(r"^\s*HEALTHCHECK\b", content, re.I | re.M):
+                    findings.append(
+                        _finding(
+                            ctx.next_id("container"),
+                            f"Missing HEALTHCHECK: {rel}",
+                            "medium",
+                            f"Dockerfile '{rel}' has no HEALTHCHECK instruction.",
+                            resource={"type": "dockerfile", "id": rel, "engine": "container"},
+                            evidence={"path": rel, "source": "live.dockerfile"},
+                            engine="container",
+                            backend="embedded",
+                        )
+                    )
+                if re.search(r"^\s*(ADD|COPY)\s+\.\s+/", content, re.I | re.M) or re.search(
+                    r"^\s*(ADD|COPY)\s+\.\s+\.", content, re.I | re.M
+                ):
+                    findings.append(
+                        _finding(
+                            ctx.next_id("container"),
+                            f"Broad build context copy: {rel}",
+                            "high",
+                            f"Dockerfile '{rel}' copies entire context into the image.",
+                            resource={"type": "dockerfile", "id": rel, "engine": "container"},
+                            evidence={"path": rel, "source": "live.dockerfile"},
+                            engine="container",
+                            backend="embedded",
+                        )
+                    )
+
+        if backend == "trivy":
+            trivy = (ctx.backends.get("trivy") or {}).get("path")
+            if trivy and root.exists():
+                try:
+                    cmd = [
+                        trivy,
+                        "config",
+                        "--format",
+                        "json",
+                        "--quiet",
+                        str(root),
+                    ]
+                    p = subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
+                    raw = (p.stdout or "").strip()
+                    if raw:
+                        data = json.loads(raw)
+                        for res in data.get("Results") or []:
+                            for m in res.get("Misconfigurations") or []:
+                                sev = _norm_sev(m.get("Severity"), "medium")
+                                mid = m.get("ID") or m.get("AVDID") or "misconfig"
+                                findings.append(
+                                    _finding(
+                                        ctx.next_id("container"),
+                                        f"Trivy config {mid}: {m.get('Title') or mid}",
+                                        sev,
+                                        m.get("Description") or m.get("Message") or mid,
+                                        resource={
+                                            "type": "dockerfile",
+                                            "id": res.get("Target") or str(root),
+                                            "engine": "container",
+                                        },
+                                        evidence={"trivy_misconfig": m, "source": "live.trivy.config"},
+                                        engine="container",
+                                        backend="trivy",
+                                    )
+                                )
+                except Exception:
+                    pass
+    return findings
 
 
 def _engine_iac(ctx: PackContext) -> list[dict]:
@@ -755,7 +1321,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "sca",
         "code": "SCA",
         "name": "Software Composition Analysis",
-        "status": "stub",  # → D3
+        "status": "active",  # D3
         "phase": "D3",
         "preferred_backends": ["trivy", "grype", "embedded"],
         "run": _engine_sca,
@@ -765,7 +1331,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "container",
         "code": "CTR",
         "name": "Container Image & Dockerfile",
-        "status": "stub",  # → D3
+        "status": "active",  # D3
         "phase": "D3",
         "preferred_backends": ["trivy", "embedded"],
         "run": _engine_container,
@@ -947,14 +1513,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "D2",
-        "label": "secrets_cicd_active",
+        "phase": "D3",
+        "label": "secrets_cicd_sca_container_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full multi-engine pack — not 18-check ceiling",
-        "next_phase": "D3 sca + container + iac (trivy)",
+        "next_phase": "D4 iac + policy-as-code (trivy/checkov)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
     }
 
@@ -1010,7 +1576,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"DevSecOps pack failed: {err}",
-                "pack_phase": "D2",
+                "pack_phase": "D3",
             },
         }
 
@@ -1045,6 +1611,13 @@ def run(params: dict) -> dict:
                 ev.setdefault("backend", backend_used)
                 ev.setdefault("check_id", f.get("id"))
             entry["findings"] = findings
+            # Prefer backends engines actually stamped (fixture path → embedded)
+            stamped = [f.get("evidence", {}).get("backend") for f in findings]
+            stamped = [b for b in stamped if b]
+            if stamped:
+                entry["backend_used"] = max(set(stamped), key=stamped.count)
+            elif mode == "mock":
+                entry["backend_used"] = "embedded"
             all_findings.extend(findings)
         except Exception as e:
             entry["error"] = str(e)
@@ -1121,7 +1694,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "D2",
+            "pack_phase": "D3",
             "pack_readiness": readiness,
             "engine_registry": [
                 {

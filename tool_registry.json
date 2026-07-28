@@ -208,7 +208,7 @@
     },
     {
       "tool_id": "scan_devsecops_pack",
-      "version": "0.2.0-d2",
+      "version": "0.3.0-d3",
       "module_file": "ai_devsecops_pack.py",
       "entry_point": "run",
       "sentinel": "infrastructure",
@@ -228,7 +228,7 @@
         "trivy",
         "gitleaks",
         "enterprise",
-        "d2-secrets-cicd"
+        "d3-sca-container"
       ],
       "params": {
         "target": "repo path, label, or fixture JSON",
@@ -248,18 +248,20 @@
         "repo_gov",
         "release"
       ],
-      "pack_phase": "D2",
+      "pack_phase": "D3",
       "depends_on": [],
       "active_engines": [
         "secrets",
-        "cicd"
+        "cicd",
+        "sca",
+        "container"
       ],
-      "description": "Enterprise DevSecOps multi-engine pack \u2014 D2 Secrets (SEC) + CI/CD (CICD) active; 8 engines remain stub until later phases (SCA/container/IaC next).",
+      "description": "Enterprise DevSecOps multi-engine pack \u2014 D3 Secrets+CI/CD+SCA+Container active; 6 engines remain stub (IaC/policy next).",
       "engines_status": {
         "secrets": "active",
         "cicd": "active",
-        "sca": "stub",
-        "container": "stub",
+        "sca": "active",
+        "container": "active",
         "iac": "stub",
         "sast": "stub",
         "supply_chain": "stub",
