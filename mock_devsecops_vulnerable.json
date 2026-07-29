@@ -201,8 +201,24 @@
         "path": "api/auth.py",
         "line": 15,
         "detail": "JWT_SECRET = 'dev-secret-change-me'"
+      },
+      {
+        "rule": "command-injection-os-system",
+        "severity": "critical",
+        "path": "api/jobs.py",
+        "line": 42,
+        "detail": "os.system(user_supplied_cmd) without sanitization"
+      },
+      {
+        "rule": "xss-unescaped-template",
+        "severity": "high",
+        "path": "web/templates/profile.html",
+        "line": 27,
+        "detail": "user-controlled HTML rendered without escaping"
       }
-    ]
+    ],
+    "sast_in_ci": false,
+    "dangerous_sinks_unreviewed": true
   },
   "cicd": {
     "platform": "github_actions",

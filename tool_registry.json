@@ -208,7 +208,7 @@
     },
     {
       "tool_id": "scan_devsecops_pack",
-      "version": "0.5.0-d5",
+      "version": "0.6.0-d6",
       "module_file": "ai_devsecops_pack.py",
       "entry_point": "run",
       "sentinel": "infrastructure",
@@ -228,7 +228,7 @@
         "trivy",
         "gitleaks",
         "enterprise",
-        "d5-supply-release-gov"
+        "d6-sast-complete"
       ],
       "params": {
         "target": "repo path, label, or fixture JSON",
@@ -248,7 +248,7 @@
         "repo_gov",
         "release"
       ],
-      "pack_phase": "D5",
+      "pack_phase": "D6",
       "depends_on": [],
       "active_engines": [
         "secrets",
@@ -259,9 +259,10 @@
         "policy",
         "supply_chain",
         "repo_gov",
-        "release"
+        "release",
+        "sast"
       ],
-      "description": "Enterprise DevSecOps multi-engine pack \u2014 D5 nine engines active (supply_chain + release + repo_gov); SAST remains stub until D6.",
+      "description": "Enterprise DevSecOps multi-engine pack \u2014 D6 COMPLETE: all 10 engines active (SAST closed). Next: DEVSEC FIX_MAP + role brain.",
       "engines_status": {
         "secrets": "active",
         "cicd": "active",
@@ -272,8 +273,9 @@
         "supply_chain": "active",
         "repo_gov": "active",
         "release": "active",
-        "sast": "stub"
-      }
+        "sast": "active"
+      },
+      "pack_hands_complete": true
     }
   ]
 }

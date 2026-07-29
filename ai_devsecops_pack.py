@@ -11,6 +11,8 @@
 #            fixture + optional Trivy config / Checkov live backends.
 # Phase D5: Supply Chain (SC) + Release (REL) + Repo Governance (GOV)
 #            engines ACTIVE — embedded fixture + optional syft live.
+# Phase D6: SAST (SAST) engine ACTIVE — embedded fixture + optional
+#            semgrep live; pack hands COMPLETE (10/10).
 # Enterprise bar: no 18-check ceiling. Capacity grows by engine.
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_devsecops_pack"
-VERSION = "0.5.0-d5"
+VERSION = "0.6.0-d6"
 DOMAIN = "devsecops"
 SUBDOMAIN = "devsecops/pack"
 SENTINEL = "infrastructure"
@@ -1221,10 +1223,248 @@ def _engine_iac(ctx: PackContext) -> list[dict]:
     return findings
 
 
+def _sast_rule_title(rule: str) -> str:
+    return (rule or "sast-issue").replace("_", "-")
+
+
 def _engine_sast(ctx: PackContext) -> list[dict]:
-    """D6: semgrep-class / language rules. D1 stub."""
-    _ = ctx
-    return []
+    """Static application security — embedded fixture + optional semgrep live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "sast"),
+        ctx.backends,
+    )
+    sast = ctx.section("sast") if ctx.fixture else {}
+
+    if sast:
+        for issue in sast.get("issues") or []:
+            rule = issue.get("rule") or "sast-rule"
+            sev = _norm_sev(issue.get("severity"), "high")
+            path = issue.get("path") or "unknown"
+            line = issue.get("line")
+            detail = issue.get("detail") or rule
+            findings.append(
+                _finding(
+                    ctx.next_id("sast"),
+                    f"SAST: {_sast_rule_title(rule)}",
+                    sev,
+                    f"{path}"
+                    + (f":{line}" if line is not None else "")
+                    + f" — {rule}: {detail}",
+                    resource={
+                        "type": "source_file",
+                        "id": path,
+                        "engine": "sast",
+                        "line": line,
+                        "rule": rule,
+                    },
+                    evidence={
+                        "path": path,
+                        "line": line,
+                        "rule": rule,
+                        "detail": detail,
+                        "source": "fixture.sast.issues",
+                    },
+                    remediation={
+                        "steps": [
+                            f"Remediate {rule} at {path}"
+                            + (f":{line}" if line is not None else "")
+                            + ".",
+                            "Prefer parameterized queries / safe APIs over string assembly.",
+                            "Move secrets to a vault or env injected at runtime — never hardcode.",
+                            "Add Semgrep/CodeQL (or equivalent) as a required PR status check.",
+                            "Re-run scan_devsecops_pack SAST engine after fix.",
+                        ],
+                        "effort": "medium" if sev != "critical" else "high",
+                    },
+                    compliance=[
+                        "OWASP ASVS",
+                        "NIST 800-53 SA-11",
+                        "NIST 800-53 SI-10",
+                        "CIS Software Supply Chain 4.1",
+                    ],
+                    engine="sast",
+                    backend="embedded",
+                )
+            )
+
+        if sast.get("sast_in_ci") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("sast"),
+                    "SAST not required in CI pipeline",
+                    "high",
+                    "Static application security testing is not a required pipeline gate. "
+                    "Injection and auth flaws can merge without automated source analysis.",
+                    resource={"type": "repo_setting", "id": "sast_in_ci", "engine": "sast"},
+                    evidence={
+                        "sast_in_ci": False,
+                        "source": "fixture.sast.sast_in_ci",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add Semgrep, CodeQL, or Bandit/SpotBugs job on pull_request.",
+                            "Fail on critical/high confidence findings.",
+                            "Mark the SAST job as a required status check on the default branch.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST 800-53 SA-11", "OWASP SAMM"],
+                    engine="sast",
+                    backend="embedded",
+                )
+            )
+
+        if sast.get("dangerous_sinks_unreviewed") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("sast"),
+                    "Dangerous sinks present without review coverage",
+                    "medium",
+                    "Codebase contains high-risk sinks (exec/eval/raw SQL/deserialize) that are "
+                    "not covered by mandatory peer review or automated taint rules.",
+                    resource={"type": "code_pattern", "id": "dangerous_sinks", "engine": "sast"},
+                    evidence={
+                        "dangerous_sinks_unreviewed": True,
+                        "source": "fixture.sast.dangerous_sinks_unreviewed",
+                    },
+                    remediation={
+                        "steps": [
+                            "Inventory exec/eval/raw-SQL/pickle/yaml.load full sinks.",
+                            "Require CODEOWNERS review on files with those patterns.",
+                            "Add Semgrep taint rules for untrusted → sink flows.",
+                        ],
+                        "effort": "medium",
+                    },
+                    engine="sast",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    # Live: optional semgrep; lightweight pattern fallback
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if not root.is_dir():
+            return findings
+
+        smg = (ctx.backends.get("semgrep") or {}).get("path")
+        if backend == "semgrep" and smg:
+            try:
+                cmd = [
+                    smg,
+                    "scan",
+                    "--config",
+                    "p/owasp-top-ten",
+                    "--json",
+                    "--quiet",
+                    str(root),
+                ]
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+                raw = (p.stdout or "").strip()
+                if raw:
+                    data = json.loads(raw)
+                    for res in data.get("results") or []:
+                        path = res.get("path") or "unknown"
+                        check = (res.get("check_id") or "semgrep").split(".")[-1]
+                        sev = _norm_sev(
+                            (res.get("extra") or {}).get("severity")
+                            or (res.get("extra") or {}).get("metadata", {}).get("impact"),
+                            "medium",
+                        )
+                        msg = (res.get("extra") or {}).get("message") or check
+                        start = ((res.get("start") or {}) if isinstance(res.get("start"), dict) else {})
+                        line = start.get("line")
+                        findings.append(
+                            _finding(
+                                ctx.next_id("sast"),
+                                f"Semgrep: {check}",
+                                sev,
+                                msg,
+                                resource={
+                                    "type": "source_file",
+                                    "id": path,
+                                    "engine": "sast",
+                                    "line": line,
+                                },
+                                evidence={"semgrep": res, "source": "live.semgrep"},
+                                engine="sast",
+                                backend="semgrep",
+                            )
+                        )
+            except Exception:
+                pass
+
+        if not findings:
+            # lightweight python patterns — capped
+            py_files = [p for p in root.rglob("*.py") if ".git" not in p.parts][:80]
+            patterns = [
+                (
+                    re.compile(r"""(?:execute|cursor\.execute)\s*\(\s*[f\"'].*%|f[\"'].*SELECT|f[\"'].*INSERT""", re.I),
+                    "sql-injection-string-format",
+                    "critical",
+                    "Possible SQL built via string formatting",
+                ),
+                (
+                    re.compile(r"""(?:eval|exec)\s*\(""", re.I),
+                    "dangerous-eval-exec",
+                    "high",
+                    "Use of eval/exec",
+                ),
+                (
+                    re.compile(r"""pickle\.loads?\s*\(""", re.I),
+                    "insecure-deserialization-pickle",
+                    "high",
+                    "pickle.load on untrusted data is RCE-class",
+                ),
+                (
+                    re.compile(r"""(?:secret|password|api_key|jwt_secret)\s*=\s*['\"][^'\"]+['\"]""", re.I),
+                    "hardcoded-secret-assignment",
+                    "high",
+                    "Hardcoded secret-like assignment",
+                ),
+            ]
+            seen = 0
+            for pf in py_files:
+                if seen >= 25:
+                    break
+                try:
+                    content = pf.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                rel = str(pf.relative_to(root)) if pf.is_relative_to(root) else str(pf)
+                for i, line in enumerate(content.splitlines(), 1):
+                    for cre, rule, sev, detail in patterns:
+                        if cre.search(line):
+                            findings.append(
+                                _finding(
+                                    ctx.next_id("sast"),
+                                    f"SAST: {rule}",
+                                    sev,
+                                    f"{rel}:{i} — {detail}",
+                                    resource={
+                                        "type": "source_file",
+                                        "id": rel,
+                                        "engine": "sast",
+                                        "line": i,
+                                    },
+                                    evidence={
+                                        "path": rel,
+                                        "line": i,
+                                        "rule": rule,
+                                        "snippet": line.strip()[:120],
+                                        "source": "live.embedded.pattern",
+                                    },
+                                    engine="sast",
+                                    backend="embedded",
+                                )
+                            )
+                            seen += 1
+                            break
+                    if seen >= 25:
+                        break
+    return findings
 
 
 def _engine_cicd(ctx: PackContext) -> list[dict]:
@@ -2209,7 +2449,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "sast",
         "code": "SAST",
         "name": "Static Application Security (pipeline-side)",
-        "status": "stub",  # → D6
+        "status": "active",  # D6
         "phase": "D6",
         "preferred_backends": ["semgrep", "embedded"],
         "run": _engine_sast,
@@ -2371,15 +2611,16 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "D5",
-        "label": "nine_engines_active_sast_remaining",
+        "phase": "D6",
+        "label": "pack_hands_complete_all_engines_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full multi-engine pack — not 18-check ceiling",
-        "next_phase": "D6 SAST (semgrep-class) — pack complete",
+        "next_phase": "FIX_MAP expand for DEVSEC-* IDs → role brain after all-role hands",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
+        "pack_hands_complete": active == total and stub == 0,
     }
 
 
@@ -2434,7 +2675,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"DevSecOps pack failed: {err}",
-                "pack_phase": "D5",
+                "pack_phase": "D6",
             },
         }
 
@@ -2552,7 +2793,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "D5",
+            "pack_phase": "D6",
             "pack_readiness": readiness,
             "engine_registry": [
                 {
