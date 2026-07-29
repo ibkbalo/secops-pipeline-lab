@@ -9,6 +9,8 @@
 #            + optional Trivy live backends (fs / dockerfile / image).
 # Phase D4: IaC (IAC) + Policy-as-Code (POL) engines ACTIVE — embedded
 #            fixture + optional Trivy config / Checkov live backends.
+# Phase D5: Supply Chain (SC) + Release (REL) + Repo Governance (GOV)
+#            engines ACTIVE — embedded fixture + optional syft live.
 # Enterprise bar: no 18-check ceiling. Capacity grows by engine.
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_devsecops_pack"
-VERSION = "0.4.0-d4"
+VERSION = "0.5.0-d5"
 DOMAIN = "devsecops"
 SUBDOMAIN = "devsecops/pack"
 SENTINEL = "infrastructure"
@@ -1514,9 +1516,199 @@ def _engine_cicd(ctx: PackContext) -> list[dict]:
 
 
 def _engine_supply_chain(ctx: PackContext) -> list[dict]:
-    """D5: SBOM / cosign hooks. D1 stub."""
-    _ = ctx
-    return []
+    """Supply chain & SBOM — embedded fixture + optional syft live."""
+    findings: list[dict] = []
+    backend = _resolve_backend(
+        next(e for e in ENGINE_REGISTRY if e["key"] == "supply_chain"),
+        ctx.backends,
+    )
+    sc = ctx.section("supply_chain") if ctx.fixture else {}
+
+    if sc:
+        if sc.get("sbom_published") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("supply_chain"),
+                    "SBOM not published with releases",
+                    "high",
+                    "No Software Bill of Materials is published for builds/releases. "
+                    "Consumers cannot inventory transitive risk or respond to new CVEs quickly.",
+                    resource={"type": "sbom", "id": "release-sbom", "engine": "supply_chain"},
+                    evidence={
+                        "sbom_published": False,
+                        "source": "fixture.supply_chain.sbom_published",
+                    },
+                    remediation={
+                        "steps": [
+                            "Generate SPDX/CycloneDX SBOM in CI (syft, trivy, cdxgen).",
+                            "Attach SBOM to release artifacts and container manifests.",
+                            "Store SBOMs with retention matching release retention policy.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=[
+                        "EO 14028 SBOM",
+                        "CIS Software Supply Chain 3.1",
+                        "NIST SSDF PW.4",
+                    ],
+                    engine="supply_chain",
+                    backend="embedded",
+                )
+            )
+
+        if sc.get("signed_images") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("supply_chain"),
+                    "Container images not signed",
+                    "critical",
+                    "Release images are not cryptographically signed (cosign/notation). "
+                    "Registries cannot enforce provenance before deploy.",
+                    resource={"type": "image_signing", "id": "cosign", "engine": "supply_chain"},
+                    evidence={
+                        "signed_images": False,
+                        "source": "fixture.supply_chain.signed_images",
+                    },
+                    remediation={
+                        "steps": [
+                            "Sign images with cosign keyless (OIDC) or KMS-backed keys.",
+                            "Enforce signature verification in admission (Kyverno/cosign policy).",
+                            "Publish signatures/attestations next to the image digest.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=[
+                        "SLSA L2+",
+                        "CIS Software Supply Chain 3.5",
+                        "NIST SSDF PS.3",
+                    ],
+                    engine="supply_chain",
+                    backend="embedded",
+                )
+            )
+
+        slsa = sc.get("slsa_level")
+        if slsa is not None and int(slsa) < 2:
+            findings.append(
+                _finding(
+                    ctx.next_id("supply_chain"),
+                    f"SLSA level too low ({slsa})",
+                    "high",
+                    f"Build provenance is at SLSA level {slsa}. Target at least SLSA L2 "
+                    f"(hosted build, provenance) and plan L3 for high-assurance releases.",
+                    resource={"type": "slsa", "id": f"level-{slsa}", "engine": "supply_chain"},
+                    evidence={
+                        "slsa_level": slsa,
+                        "source": "fixture.supply_chain.slsa_level",
+                    },
+                    remediation={
+                        "steps": [
+                            "Emit SLSA provenance attestations from the CI builder.",
+                            "Use hermetic / reusable workflows with pinned actions.",
+                            "Verify provenance in deploy gates before production.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["SLSA", "CIS Software Supply Chain 2.3"],
+                    engine="supply_chain",
+                    backend="embedded",
+                )
+            )
+
+        if sc.get("dependency_review_on_pr") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("supply_chain"),
+                    "Dependency review missing on PRs",
+                    "high",
+                    "PRs do not run dependency review (GitHub Dependency Review / Snyk / OSV). "
+                    "New vulnerable packages can merge without a gate.",
+                    resource={"type": "pr_gate", "id": "dependency_review", "engine": "supply_chain"},
+                    evidence={
+                        "dependency_review_on_pr": False,
+                        "source": "fixture.supply_chain.dependency_review_on_pr",
+                    },
+                    remediation={
+                        "steps": [
+                            "Enable dependency-review-action (or equivalent) on pull_request.",
+                            "Fail on critical/high newly introduced advisories.",
+                            "Require the check on protected branches.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["CIS Software Supply Chain 3.3", "NIST 800-53 SA-11"],
+                    engine="supply_chain",
+                    backend="embedded",
+                )
+            )
+
+        for inst in sc.get("install_scripts") or []:
+            ipath = inst.get("path") or "unknown"
+            pattern = inst.get("pattern") or "curl|bash"
+            findings.append(
+                _finding(
+                    ctx.next_id("supply_chain"),
+                    f"Dangerous remote install pipe: {ipath}",
+                    "critical",
+                    f"Path '{ipath}' executes a remote installer via pipe-to-shell: {pattern}. "
+                    f"Compromised CDN/host equals full CI/runtime code execution.",
+                    resource={"type": "install_script", "id": ipath, "engine": "supply_chain"},
+                    evidence={
+                        "path": ipath,
+                        "pattern": pattern,
+                        "source": "fixture.supply_chain.install_scripts",
+                    },
+                    remediation={
+                        "steps": [
+                            "Replace curl|bash with pinned package installs or verified checksums.",
+                            "Vendor installers or use official package managers.",
+                            "Block pipe-to-shell patterns via actionlint / policy.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=[
+                        "CIS GitHub Actions 1.3",
+                        "NIST 800-53 SI-7",
+                        "CIS Software Supply Chain 2.1",
+                    ],
+                    engine="supply_chain",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    # Live: light FS checks when no fixture
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            sbom_hits = []
+            for name in ("sbom.json", "sbom.spdx.json", "bom.json", "cyclonedx.json"):
+                sbom_hits.extend(root.rglob(name))
+            sbom_hits = [p for p in sbom_hits if ".git" not in p.parts][:20]
+            if not sbom_hits:
+                findings.append(
+                    _finding(
+                        ctx.next_id("supply_chain"),
+                        "SBOM artifact not found in tree",
+                        "medium",
+                        f"No common SBOM filenames discovered under '{root}'.",
+                        resource={"type": "sbom", "id": str(root), "engine": "supply_chain"},
+                        evidence={"source": "live.fs", "sbom_count": 0},
+                        engine="supply_chain",
+                        backend="embedded",
+                    )
+                )
+            syft = (ctx.backends.get("syft") or {}).get("path")
+            if backend == "syft" and syft:
+                try:
+                    cmd = [syft, str(root), "-o", "json"]
+                    p = subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
+                    # presence of output is informational — package inventory success not a finding
+                    _ = p.stdout
+                except Exception:
+                    pass
+    return findings
 
 
 def _engine_policy(ctx: PackContext) -> list[dict]:
@@ -1697,15 +1889,278 @@ def _engine_policy(ctx: PackContext) -> list[dict]:
 
 
 def _engine_repo_gov(ctx: PackContext) -> list[dict]:
-    """D5: CODEOWNERS / branch protection. D1 stub."""
-    _ = ctx
-    return []
+    """Repository governance — CODEOWNERS, SECURITY.md, workflow perms (embedded)."""
+    findings: list[dict] = []
+    gov = ctx.section("repo_gov") if ctx.fixture else {}
+
+    if gov:
+        if not gov.get("codeowners"):
+            findings.append(
+                _finding(
+                    ctx.next_id("repo_gov"),
+                    "CODEOWNERS missing",
+                    "high",
+                    "No CODEOWNERS file is configured. Critical paths can merge without "
+                    "named owner review.",
+                    resource={"type": "repo_file", "id": "CODEOWNERS", "engine": "repo_gov"},
+                    evidence={
+                        "codeowners": gov.get("codeowners"),
+                        "source": "fixture.repo_gov.codeowners",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add CODEOWNERS covering .github/, infra/, auth, and release paths.",
+                            "Enable 'Require review from Code Owners' on protected branches.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["CIS GitHub 1.1.6", "SOC 2 CC8.1"],
+                    engine="repo_gov",
+                    backend="embedded",
+                )
+            )
+
+        if gov.get("security_md") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("repo_gov"),
+                    "SECURITY.md missing",
+                    "medium",
+                    "No SECURITY.md vulnerability disclosure policy. Researchers and customers "
+                    "lack a private reporting channel.",
+                    resource={"type": "repo_file", "id": "SECURITY.md", "engine": "repo_gov"},
+                    evidence={
+                        "security_md": False,
+                        "source": "fixture.repo_gov.security_md",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add SECURITY.md with contact, SLA, and scope.",
+                            "Enable private vulnerability reporting on GitHub if available.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["ISO 27001 A.6.8", "CIS Software Supply Chain 1.3"],
+                    engine="repo_gov",
+                    backend="embedded",
+                )
+            )
+
+        req = gov.get("required_reviewers_for")
+        if isinstance(req, list) and len(req) == 0:
+            findings.append(
+                _finding(
+                    ctx.next_id("repo_gov"),
+                    "No path-based required reviewers",
+                    "medium",
+                    "required_reviewers_for is empty — sensitive paths are not assigned owners.",
+                    resource={"type": "repo_setting", "id": "path_reviewers", "engine": "repo_gov"},
+                    evidence={
+                        "required_reviewers_for": req,
+                        "source": "fixture.repo_gov.required_reviewers_for",
+                    },
+                    remediation={
+                        "steps": [
+                            "Map CODEOWNERS for .github/, infra/, k8s/, secrets handlers.",
+                            "Require 2 reviewers on default branch for critical paths.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["CIS GitHub 1.1.3"],
+                    engine="repo_gov",
+                    backend="embedded",
+                )
+            )
+
+        perms = (gov.get("default_workflow_permissions") or "").lower().replace("_", "-")
+        if perms in ("read-write", "write", "write-all", "readwrite"):
+            findings.append(
+                _finding(
+                    ctx.next_id("repo_gov"),
+                    f"Default workflow permissions too broad ({gov.get('default_workflow_permissions')})",
+                    "critical",
+                    "Organization/repo default GITHUB_TOKEN permissions are read-write. "
+                    "Compromised workflows inherit write to contents/packages.",
+                    resource={
+                        "type": "repo_setting",
+                        "id": "default_workflow_permissions",
+                        "engine": "repo_gov",
+                    },
+                    evidence={
+                        "default_workflow_permissions": gov.get("default_workflow_permissions"),
+                        "source": "fixture.repo_gov.default_workflow_permissions",
+                    },
+                    remediation={
+                        "steps": [
+                            "Set default workflow permissions to read-only.",
+                            "Grant write per job only when required.",
+                            "Disable 'Allow GitHub Actions to create and approve pull requests' unless needed.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=[
+                        "CIS GitHub Actions 1.1",
+                        "NIST 800-53 AC-6",
+                    ],
+                    engine="repo_gov",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            co = list(root.rglob("CODEOWNERS"))
+            co = [p for p in co if ".git" not in p.parts]
+            if not co:
+                findings.append(
+                    _finding(
+                        ctx.next_id("repo_gov"),
+                        "CODEOWNERS missing",
+                        "high",
+                        f"No CODEOWNERS found under '{root}'.",
+                        resource={"type": "repo_file", "id": "CODEOWNERS", "engine": "repo_gov"},
+                        evidence={"source": "live.fs"},
+                        engine="repo_gov",
+                        backend="embedded",
+                    )
+                )
+            sec = list(root.rglob("SECURITY.md")) + list(root.rglob("security.md"))
+            sec = [p for p in sec if ".git" not in p.parts]
+            if not sec:
+                findings.append(
+                    _finding(
+                        ctx.next_id("repo_gov"),
+                        "SECURITY.md missing",
+                        "medium",
+                        f"No SECURITY.md found under '{root}'.",
+                        resource={"type": "repo_file", "id": "SECURITY.md", "engine": "repo_gov"},
+                        evidence={"source": "live.fs"},
+                        engine="repo_gov",
+                        backend="embedded",
+                    )
+                )
+    return findings
 
 
 def _engine_release(ctx: PackContext) -> list[dict]:
-    """D5: release attestation / artifact retention. D1 stub."""
-    _ = ctx
-    return []
+    """Release & artifact integrity — retention, provenance, env protection."""
+    findings: list[dict] = []
+    rel = ctx.section("release") if ctx.fixture else {}
+    if not rel:
+        return findings
+
+    days = rel.get("artifact_retention_days")
+    if days is not None and int(days) < 30:
+        findings.append(
+            _finding(
+                ctx.next_id("release"),
+                f"Artifact retention too short ({days} days)",
+                "high",
+                f"Build/release artifacts are retained only {days} day(s). Incident response "
+                f"and audit reconstruction require longer retention (typically 30–90+ days).",
+                resource={"type": "artifact_policy", "id": "retention", "engine": "release"},
+                evidence={
+                    "artifact_retention_days": days,
+                    "source": "fixture.release.artifact_retention_days",
+                },
+                remediation={
+                    "steps": [
+                        "Set artifact retention to at least 90 days for production pipelines.",
+                        "Archive release artifacts to immutable object storage with lifecycle rules.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST 800-53 AU-11", "SOC 2 CC7.2"],
+                engine="release",
+                backend="embedded",
+            )
+        )
+
+    if rel.get("provenance_attestations") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("release"),
+                "Release provenance attestations missing",
+                "high",
+                "Releases lack provenance attestations (SLSA / in-toto). Downstream cannot "
+                "verify who built what from which commit.",
+                resource={"type": "attestation", "id": "provenance", "engine": "release"},
+                evidence={
+                    "provenance_attestations": False,
+                    "source": "fixture.release.provenance_attestations",
+                },
+                remediation={
+                    "steps": [
+                        "Emit build provenance (e.g. actions/attest-build-provenance).",
+                        "Attach attestations to GitHub Releases / OCI references.",
+                        "Verify attestations in deploy workflows before promotion.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["SLSA L2+", "CIS Software Supply Chain 2.3"],
+                engine="release",
+                backend="embedded",
+            )
+        )
+
+    if rel.get("environment_protection_rules") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("release"),
+                "Deployment environment protection disabled",
+                "critical",
+                "GitHub Environments (or equivalent) have no protection rules. Anyone with "
+                "workflow write can push straight to production secrets/targets.",
+                resource={"type": "environment", "id": "protection_rules", "engine": "release"},
+                evidence={
+                    "environment_protection_rules": False,
+                    "source": "fixture.release.environment_protection_rules",
+                },
+                remediation={
+                    "steps": [
+                        "Create production environment with required reviewers.",
+                        "Restrict secrets to the protected environment.",
+                        "Limit which branches may deploy to production.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["CIS GitHub Actions 2.1", "NIST 800-53 CM-5"],
+                engine="release",
+                backend="embedded",
+            )
+        )
+
+    if rel.get("production_manual_approval") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("release"),
+                "Production deploy lacks manual approval",
+                "high",
+                "Production deployments do not require manual approval. Automated pipelines "
+                "can ship unreviewed changes to live customer impact.",
+                resource={"type": "environment", "id": "prod-approval", "engine": "release"},
+                evidence={
+                    "production_manual_approval": False,
+                    "source": "fixture.release.production_manual_approval",
+                },
+                remediation={
+                    "steps": [
+                        "Require 1–2 human approvers on the production environment.",
+                        "Separate build and deploy jobs; gate deploy on approval.",
+                        "Log approvals for audit (change management).",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["SOC 2 CC8.1", "NIST 800-53 CM-3"],
+                engine="release",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 # Single source of truth — grow without rebuilding the facade
@@ -1774,7 +2229,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "supply_chain",
         "code": "SC",
         "name": "Supply Chain & SBOM",
-        "status": "stub",  # → D5
+        "status": "active",  # D5
         "phase": "D5",
         "preferred_backends": ["syft", "embedded"],
         "run": _engine_supply_chain,
@@ -1794,7 +2249,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "repo_gov",
         "code": "GOV",
         "name": "Repository Governance",
-        "status": "stub",  # → D5
+        "status": "active",  # D5
         "phase": "D5",
         "preferred_backends": ["embedded"],
         "run": _engine_repo_gov,
@@ -1804,7 +2259,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "release",
         "code": "REL",
         "name": "Release & Artifact Integrity",
-        "status": "stub",  # → D5
+        "status": "active",  # D5
         "phase": "D5",
         "preferred_backends": ["embedded"],
         "run": _engine_release,
@@ -1916,14 +2371,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "D4",
-        "label": "secrets_cicd_sca_container_iac_policy_active",
+        "phase": "D5",
+        "label": "nine_engines_active_sast_remaining",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full multi-engine pack — not 18-check ceiling",
-        "next_phase": "D5 supply_chain + release (+ repo_gov)",
+        "next_phase": "D6 SAST (semgrep-class) — pack complete",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
     }
 
@@ -1979,7 +2434,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"DevSecOps pack failed: {err}",
-                "pack_phase": "D4",
+                "pack_phase": "D5",
             },
         }
 
@@ -2097,7 +2552,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "D4",
+            "pack_phase": "D5",
             "pack_readiness": readiness,
             "engine_registry": [
                 {
