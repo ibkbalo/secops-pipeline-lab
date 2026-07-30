@@ -174,7 +174,7 @@
     },
     {
       "tool_id": "remediate_findings_hardening_kit",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "module_file": "ai_remediation_engine.py",
       "entry_point": "run",
       "sentinel": "remediation",
@@ -192,7 +192,10 @@
         "tier-2",
         "appsec",
         "perimeter",
-        "v1.1"
+        "v1.1",
+        "devsecops",
+        "devsec-fixmap",
+        "v1.2"
       ],
       "params": {
         "target": "path to scanner JSON, or inline {scan_report|findings}",
@@ -203,7 +206,8 @@
       "depends_on": [
         "scan_infra_auditor_aws",
         "scan_infra_auditor_azure",
-        "scan_governance_mapper"
+        "scan_governance_mapper",
+        "scan_devsecops_pack"
       ]
     },
     {
