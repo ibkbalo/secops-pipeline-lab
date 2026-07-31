@@ -1,0 +1,577 @@
+{
+  "_cloud_fixture": true,
+  "_profile": "clean",
+  "_schema_version": "1.0",
+  "_description": "Enterprise multi-cloud hardened posture \u2014 AWS + Azure CIS-aligned for Cloud Security Engineer pack C1.",
+  "account": {
+    "name": "lab-secure-multicloud",
+    "id": "cloud-lab-clean",
+    "providers": [
+      "aws",
+      "azure"
+    ]
+  },
+  "baseline": {
+    "require_guardduty": true,
+    "require_multi_region_cloudtrail": true,
+    "require_defender_standard": true,
+    "require_pim": true
+  },
+  "aws": {
+    "iam_account_summary": {
+      "AccountMFAEnabled": 1,
+      "MinimumPasswordLength": 14,
+      "RequireUppercaseCharacters": true,
+      "RequireLowercaseCharacters": true,
+      "RequireNumbers": true,
+      "RequireSymbols": true,
+      "HardExpiry": true,
+      "MaxPasswordAge": 90,
+      "PasswordReusePrevention": 24,
+      "AccountAccessKeysPresent": 0
+    },
+    "iam_credential_report": [
+      {
+        "user": "sre-admin",
+        "PasswordEnabled": "true",
+        "AccessKey1Active": "false",
+        "MfaActive": "true"
+      },
+      {
+        "user": "ci-cd-bot",
+        "PasswordEnabled": "false",
+        "AccessKey1Active": "false",
+        "AccessKey1LastRotated": "2026-07-01T10:00:00Z",
+        "MfaActive": "false"
+      },
+      {
+        "user": "readonly-auditor",
+        "PasswordEnabled": "false",
+        "AccessKey1Active": "false",
+        "AccessKey1LastRotated": "2026-06-15T14:00:00Z",
+        "MfaActive": "false"
+      }
+    ],
+    "iam_policies": [
+      {
+        "name": "sre-operator-policy",
+        "arn": "arn:aws:iam::mock-acct-secure:policy/sre-operator",
+        "has_admin_star": false,
+        "attached_to": "sre-admin"
+      },
+      {
+        "name": "ci-cd-limited",
+        "arn": "arn:aws:iam::mock-acct-secure:policy/ci-cd-limited",
+        "has_admin_star": false,
+        "attached_to": "ci-cd-bot"
+      },
+      {
+        "name": "readonly-policy",
+        "arn": "arn:aws:iam::mock-acct-secure:policy/readonly",
+        "has_admin_star": false,
+        "attached_to": "readonly-auditor"
+      }
+    ],
+    "s3_account_public_access_block": {
+      "BlockPublicAcls": true,
+      "IgnorePublicAcls": true,
+      "BlockPublicPolicy": true,
+      "RestrictPublicBuckets": true
+    },
+    "s3_buckets": [
+      {
+        "name": "secure-app-data",
+        "public_access": false,
+        "default_encryption": true,
+        "logging_enabled": true,
+        "versioning": true,
+        "mfa_delete": true
+      },
+      {
+        "name": "cloudtrail-logs",
+        "public_access": false,
+        "default_encryption": true,
+        "logging_enabled": true,
+        "versioning": true,
+        "mfa_delete": true
+      },
+      {
+        "name": "cdn-assets",
+        "public_access": false,
+        "default_encryption": true,
+        "logging_enabled": true,
+        "versioning": true,
+        "mfa_delete": true
+      }
+    ],
+    "security_groups": [
+      {
+        "id": "sg-bastion",
+        "name": "bastion-sg",
+        "vpc_id": "vpc-main",
+        "inbound_rules": [
+          {
+            "protocol": "tcp",
+            "from_port": 22,
+            "to_port": 22,
+            "cidr": "203.0.113.0/24",
+            "description": "SSH from corporate VPN only"
+          }
+        ]
+      },
+      {
+        "id": "sg-app",
+        "name": "app-sg",
+        "vpc_id": "vpc-main",
+        "inbound_rules": [
+          {
+            "protocol": "tcp",
+            "from_port": 443,
+            "to_port": 443,
+            "cidr": "10.0.0.0/16",
+            "description": "HTTPS internal only"
+          },
+          {
+            "protocol": "tcp",
+            "from_port": 443,
+            "to_port": 443,
+            "cidr": "203.0.113.0/24",
+            "description": "HTTPS from ALB"
+          }
+        ]
+      }
+    ],
+    "ec2_instances": [
+      {
+        "id": "i-secureweb01",
+        "name": "secure-web-server",
+        "state": "running",
+        "imdsv2_required": true,
+        "public_ip": null,
+        "volumes": [
+          {
+            "id": "vol-1",
+            "encrypted": true
+          }
+        ],
+        "is_production": true,
+        "ebs_optimized": true,
+        "detailed_monitoring": true
+      },
+      {
+        "id": "i-securedb01",
+        "name": "secure-db",
+        "state": "running",
+        "imdsv2_required": true,
+        "public_ip": null,
+        "volumes": [
+          {
+            "id": "vol-1",
+            "encrypted": true
+          }
+        ],
+        "is_production": true,
+        "ebs_optimized": true,
+        "detailed_monitoring": true
+      }
+    ],
+    "ebs_encryption_by_default": true,
+    "cloudtrail_trails": [
+      {
+        "name": "org-trail",
+        "is_multi_region": true,
+        "log_file_validation_enabled": true,
+        "status": "LOGGING",
+        "s3_bucket": "cloudtrail-logs"
+      }
+    ],
+    "aws_config": {
+      "recording_enabled": true,
+      "config_recorders": [
+        {
+          "name": "default",
+          "recording": true,
+          "all_supported": true
+        }
+      ]
+    },
+    "guardduty_detectors": [
+      {
+        "id": "detector-us-east-1",
+        "region": "us-east-1",
+        "status": "ENABLED"
+      }
+    ],
+    "vpcs": [
+      {
+        "id": "vpc-main",
+        "name": "main-production-vpc",
+        "flow_logs_enabled": true,
+        "cidr": "10.0.0.0/16"
+      }
+    ],
+    "kms_keys": [
+      {
+        "id": "key-app-prod",
+        "alias": "alias/app-key-prod",
+        "rotation_enabled": true,
+        "key_manager": "CUSTOMER",
+        "policy_allows_world": false
+      }
+    ],
+    "rds_instances": [
+      {
+        "id": "rds-prod-primary",
+        "engine": "postgres",
+        "storage_encrypted": true,
+        "deletion_protection": true,
+        "publicly_accessible": false,
+        "backup_retention_period": 14,
+        "multi_az": true,
+        "auto_minor_version_upgrade": true,
+        "iam_auth": true
+      }
+    ],
+    "iam_access_analyzer": {
+      "enabled": true
+    },
+    "iam_identity_center": {
+      "enabled": true
+    },
+    "support_role_present": true,
+    "stale_access_keys": [],
+    "efs_file_systems": [
+      {
+        "id": "fs-secure",
+        "encrypted": true
+      }
+    ],
+    "default_sg_restrictive": true,
+    "subnets": [
+      {
+        "id": "subnet-priv",
+        "map_public_ip": false
+      }
+    ],
+    "network_acls_open": [],
+    "security_hub": {
+      "enabled": true
+    },
+    "cloudwatch_log_metric_filters": {
+      "cis_alarms_enabled": true
+    },
+    "secrets_manager": [
+      {
+        "name": "prod/db",
+        "rotation_enabled": true
+      }
+    ],
+    "acm_certificates": [
+      {
+        "arn": "arn:acm:ok",
+        "days_to_expiry": 120
+      }
+    ],
+    "ec2_not_in_ssm": [],
+    "dynamodb_tables": [
+      {
+        "name": "sessions",
+        "sse_enabled": true,
+        "point_in_time_recovery": true
+      }
+    ],
+    "eks_clusters": [
+      {
+        "name": "prod-eks",
+        "public_endpoint": false,
+        "private_endpoint": true,
+        "secrets_encryption": true,
+        "control_plane_logging": true,
+        "audit_logs": true,
+        "version_supported": true
+      }
+    ],
+    "ecr_repositories": [
+      {
+        "name": "app",
+        "scan_on_push": true,
+        "image_tag_mutability": "IMMUTABLE"
+      }
+    ],
+    "ecs_task_definitions": [
+      {
+        "family": "web",
+        "privileged": false,
+        "host_network": false
+      }
+    ],
+    "lambda_functions": [
+      {
+        "name": "api-handler",
+        "public_url": false,
+        "function_url_auth": "AWS_IAM",
+        "env_has_secrets": false,
+        "runtime_supported": true,
+        "tracing": "Active",
+        "vpc_config_required": true,
+        "in_vpc": true,
+        "role_policy": {
+          "admin": false
+        }
+      }
+    ],
+    "api_gateways": [
+      {
+        "name": "prod-api",
+        "logging_level": "INFO",
+        "waf_associated": true
+      }
+    ],
+    "organizations": {
+      "enabled": true,
+      "all_features": true
+    },
+    "service_control_policies": [
+      {
+        "id": "scp-baseline",
+        "name": "deny-leave-org"
+      }
+    ],
+    "federation": {
+      "sso_or_saml": true
+    },
+    "cis_benchmark": {
+      "score_pct": 94,
+      "failed_controls": []
+    },
+    "tag_policy": {
+      "enforced": true
+    },
+    "aws_backup": {
+      "plan_present": true
+    },
+    "unexpected_public_resources": [],
+    "_account_id": "mock-acct-secure-987654321098"
+  },
+  "azure": {
+    "entra_id_security_defaults": {
+      "enabled": true,
+      "security_defaults_enabled": true
+    },
+    "conditional_access_policies": [
+      {
+        "name": "require-mfa-all-users",
+        "state": "enabled",
+        "grant_controls": {
+          "require_mfa": true,
+          "block_legacy_auth": true,
+          "block_high_risk": true
+        }
+      },
+      {
+        "name": "block-legacy-auth",
+        "state": "enabled",
+        "grant_controls": {
+          "require_mfa": true,
+          "block_legacy_auth": true,
+          "block_high_risk": true
+        }
+      }
+    ],
+    "entra_id_auth_methods": {
+      "legacy_auth_enabled": false,
+      "smtp_auth": false,
+      "imap": false,
+      "pop3": false
+    },
+    "entra_id_guest_settings": {
+      "guest_invite_restricted_to_admins": true,
+      "guest_users_permission_limited": true
+    },
+    "storage_accounts": [
+      {
+        "name": "secureappdataprod",
+        "secure_transfer_required": true,
+        "allow_blob_public_access": false,
+        "encryption_key_source": "Microsoft.Storage",
+        "minimum_tls_version": "TLS1_2",
+        "shared_key_access": false,
+        "network_default_action": "Deny"
+      },
+      {
+        "name": "diaglogsprod",
+        "secure_transfer_required": true,
+        "allow_blob_public_access": false,
+        "encryption_key_source": "Microsoft.Storage",
+        "minimum_tls_version": "TLS1_2",
+        "shared_key_access": false,
+        "network_default_action": "Deny"
+      }
+    ],
+    "nsg_rules": [
+      {
+        "name": "allow-https-from-internet",
+        "direction": "Inbound",
+        "source": "Internet",
+        "destination_port": "443",
+        "protocol": "Tcp",
+        "access": "Allow",
+        "priority": 100
+      }
+    ],
+    "key_vaults": [
+      {
+        "name": "kv-app-secrets-prod",
+        "soft_delete_enabled": true,
+        "purge_protection_enabled": true,
+        "network_acls": {
+          "default_action": "Deny"
+        },
+        "enable_rbac_authorization": true,
+        "rbac_authorization": true,
+        "public_network_access": "Disabled"
+      }
+    ],
+    "defender_for_cloud": {
+      "tier": "Standard",
+      "plans": {
+        "servers": "Standard",
+        "storage": "Standard",
+        "sql": "Standard",
+        "containers": "Standard"
+      }
+    },
+    "activity_log_export": {
+      "export_to_log_analytics": true,
+      "export_to_storage_account": true,
+      "export_to_event_hub": false
+    },
+    "log_analytics_workspace": {
+      "name": "prod-workspace",
+      "retention_days": 365,
+      "sku": "PerGB2018"
+    },
+    "sql_databases": [
+      {
+        "name": "sqldb-prod-primary",
+        "server": "sqlsrv-prod",
+        "tde_enabled": true,
+        "auditing_enabled": true,
+        "public_network_access": "Disabled",
+        "threat_detection": true
+      }
+    ],
+    "virtual_machines": [
+      {
+        "name": "vm-web-prod-01",
+        "is_production": true,
+        "has_public_ip": false,
+        "disk_encryption_enabled": true,
+        "os_type": "Linux",
+        "secure_boot": true,
+        "patch_orchestration": true
+      },
+      {
+        "name": "vm-web-prod-02",
+        "is_production": true,
+        "has_public_ip": false,
+        "disk_encryption_enabled": true,
+        "os_type": "Linux",
+        "secure_boot": true,
+        "patch_orchestration": true
+      },
+      {
+        "name": "vm-db-prod-01",
+        "is_production": true,
+        "has_public_ip": false,
+        "disk_encryption_enabled": true,
+        "os_type": "Windows",
+        "secure_boot": true,
+        "patch_orchestration": true
+      }
+    ],
+    "overprivileged_role_assignments": [],
+    "custom_roles_with_wildcard": [],
+    "service_principals_with_owner": [],
+    "admin_mfa_enforced": true,
+    "public_endpoints": [],
+    "ddos_protection": {
+      "enabled": true,
+      "standard_enabled": true
+    },
+    "resources_missing_diagnostics": [],
+    "cosmos_accounts": [
+      {
+        "name": "cosmos-prod",
+        "public_network_access": "Disabled"
+      }
+    ],
+    "aks_clusters": [
+      {
+        "name": "aks-prod",
+        "public_fqdn": false,
+        "private_cluster": true,
+        "azure_rbac": true,
+        "aad_rbac": true,
+        "defender_enabled": true,
+        "authorized_ip_ranges": [
+          "10.0.0.0/8"
+        ]
+      }
+    ],
+    "acr_registries": [
+      {
+        "name": "acrprod",
+        "admin_enabled": false,
+        "public_network_access": "Disabled"
+      }
+    ],
+    "function_apps": [
+      {
+        "name": "func-api",
+        "https_only": true,
+        "public_network_access": "Disabled",
+        "remote_debugging": false,
+        "managed_identity": true
+      }
+    ],
+    "pim_enabled": true,
+    "entra_pim": {
+      "enabled": true
+    },
+    "global_admin_count": 3,
+    "ca_block_legacy_or_risky": true,
+    "identity_protection": {
+      "enabled": true,
+      "policies_enabled": true
+    },
+    "ca_require_compliant_device": true,
+    "secure_score": {
+      "pct": 88
+    },
+    "policy_initiatives": [
+      {
+        "name": "MCSB",
+        "assignment": "sub-root"
+      }
+    ],
+    "azure_policy": {
+      "initiatives": [
+        {
+          "name": "MCSB"
+        }
+      ]
+    },
+    "policy_noncompliant": [],
+    "unexpected_public_resources": [],
+    "_subscription_id": "mock-sub-secure-eeee-ffff-gggg-hhhhhhhhhhhh"
+  },
+  "engines": {
+    "compliance": {
+      "missing_baselines": []
+    },
+    "drift": {
+      "items": []
+    }
+  }
+}

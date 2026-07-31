@@ -1,6 +1,6 @@
 {
   "registry_version": "1.0.0",
-  "updated_at": "2026-07-27T20:54:30Z",
+  "updated_at": "2026-07-30T00:00:00Z",
   "sentinel": "sentinel_stacks",
   "description": "Sentinel Stacks product module registry. Each entry is importable as run(params) and emits TOOL_STANDARDS.md v1.0 JSON.",
   "modules": [
@@ -195,7 +195,9 @@
         "v1.1",
         "devsecops",
         "devsec-fixmap",
-        "v1.2"
+        "v1.2",
+        "cloud-pack",
+        "c1"
       ],
       "params": {
         "target": "path to scanner JSON, or inline {scan_report|findings}",
@@ -207,7 +209,8 @@
         "scan_infra_auditor_aws",
         "scan_infra_auditor_azure",
         "scan_governance_mapper",
-        "scan_devsecops_pack"
+        "scan_devsecops_pack",
+        "scan_cloud_pack"
       ]
     },
     {
@@ -280,6 +283,45 @@
         "sast": "active"
       },
       "pack_hands_complete": true
+    },
+    {
+      "tool_id": "scan_cloud_pack",
+      "module": "ai_cloud_pack.py",
+      "version": "0.1.0-c1",
+      "domain": "infrastructure",
+      "subdomain": "infrastructure/cloud",
+      "sentinel": "infrastructure",
+      "tier": 1,
+      "status": "active",
+      "description": "Enterprise Cloud Security Engineer multi-engine pack (AWS+Azure): IAM, storage, network, logging, crypto, compute, database, containers, serverless, identity, compliance, drift.",
+      "entry": "run",
+      "tags": [
+        "cloud",
+        "multi-engine",
+        "aws",
+        "azure",
+        "iam",
+        "cis",
+        "enterprise",
+        "cloud-security-engineer",
+        "c1"
+      ],
+      "depends_on": [],
+      "id_scheme": "CLOUD-{ENGINE_CODE}-{NNN}",
+      "engines": [
+        "iam",
+        "storage",
+        "network",
+        "logging",
+        "crypto",
+        "compute",
+        "database",
+        "containers",
+        "serverless",
+        "identity",
+        "compliance",
+        "drift"
+      ]
     }
   ]
 }
