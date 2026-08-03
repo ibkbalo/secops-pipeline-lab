@@ -1,0 +1,70 @@
+{
+  "_security_engineer_fixture": true,
+  "_profile": "clean",
+  "_description": "Enterprise Security Engineer multi-engine OFFLINE fixture — hardened profile. Engines (when active) should emit 0 findings and high domain scores.",
+  "_schema_version": "1.0.0",
+  "target": {
+    "url": "https://app-hardened.example.invalid",
+    "hostname": "app-hardened.example.invalid",
+    "ip": "203.0.113.10"
+  },
+  "network": {
+    "tls_version": "TLSv1.3",
+    "cert_expired": false,
+    "open_ports": [443],
+    "dns_spf": "v=spf1 include:_spf.example.invalid -all",
+    "dns_dmarc": "v=DMARC1; p=reject; rua=mailto:dmarc@example.invalid",
+    "cdn_waf": true
+  },
+  "data_exposure": {
+    "paths_found": [],
+    "s3_public_buckets": [],
+    "robots_disallow_sensitive": true
+  },
+  "api": {
+    "openapi_exposed": false,
+    "admin_paths": [],
+    "unauthenticated_endpoints": [],
+    "rate_limiting": true
+  },
+  "vuln": {
+    "missing_headers": [],
+    "xss_reflected": false,
+    "open_redirect": false,
+    "cookie_flags_missing": []
+  },
+  "identity": {
+    "session_fixation_risk": false,
+    "jwt_alg_none_accepted": false,
+    "oauth_state_not_required": false,
+    "mfa_not_enforced": false
+  },
+  "governance": {
+    "security_txt": true,
+    "privacy_policy_linked": true,
+    "server_banner_leak": null,
+    "hsts_max_age": 31536000
+  },
+  "phishing": {
+    "domain_dmarc_policy": "reject",
+    "spf_record_present": true,
+    "dkim_selectors_configured": true,
+    "samples": []
+  },
+  "traffic": {
+    "anomaly_spikes": [],
+    "geo_impossible_travel": false,
+    "scanner_noise_detected": false
+  },
+  "protocol": {
+    "services": [
+      {"port": 443, "service": "https", "version": "unknown", "exposed_internet": true}
+    ],
+    "deprecated_protocols": []
+  },
+  "asset": {
+    "subdomains": ["api.app-hardened.example.invalid"],
+    "shadow_it_hosts": [],
+    "unclaimed_dns": false
+  }
+}

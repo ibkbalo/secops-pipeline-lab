@@ -1,6 +1,6 @@
 {
   "registry_version": "1.0.0",
-  "updated_at": "2026-07-30T00:00:00Z",
+  "updated_at": "2026-08-03T12:00:00Z",
   "sentinel": "sentinel_stacks",
   "description": "Sentinel Stacks product module registry. Each entry is importable as run(params) and emits TOOL_STANDARDS.md v1.0 JSON.",
   "modules": [
@@ -324,6 +324,68 @@
         "compliance",
         "drift"
       ]
+    },
+    {
+      "tool_id": "scan_security_engineer_pack",
+      "version": "0.2.0-p2",
+      "module_file": "ai_security_engineer_pack.py",
+      "entry_point": "run",
+      "sentinel": "perimeter",
+      "domain": "appsec",
+      "subdomain": "security-engineer/pack",
+      "tier": 1,
+      "role": "security-engineer",
+      "tags": [
+        "security-engineer",
+        "perimeter",
+        "multi-engine",
+        "network",
+        "api",
+        "owasp",
+        "phishing",
+        "email",
+        "appsec",
+        "enterprise",
+        "p2-phishing"
+      ],
+      "params": {
+        "target": "public URL, label, or fixture JSON",
+        "mock_file": "optional offline multi-engine fixture",
+        "engines": "optional subset list of engine keys",
+        "timeout": 120
+      },
+      "engines": [
+        "network",
+        "data_exposure",
+        "api",
+        "vuln",
+        "identity",
+        "governance",
+        "phishing",
+        "traffic",
+        "protocol",
+        "asset"
+      ],
+      "pack_phase": "P2",
+      "depends_on": [],
+      "active_engines": [
+        "phishing"
+      ],
+      "description": "Enterprise Security Engineer multi-engine pack — P2 Phishing (PHISH) active; 9 engines remain stub until P3+.",
+      "engines_status": {
+        "network": "stub",
+        "data_exposure": "stub",
+        "api": "stub",
+        "vuln": "stub",
+        "identity": "stub",
+        "governance": "stub",
+        "phishing": "active",
+        "traffic": "stub",
+        "protocol": "stub",
+        "asset": "stub"
+      },
+      "pack_hands_complete": false,
+      "id_scheme": "PERIM-{ENGINE_CODE}-{NNN}"
     }
   ]
 }

@@ -1,0 +1,102 @@
+{
+  "_security_engineer_fixture": true,
+  "_profile": "vulnerable",
+  "_description": "Enterprise Security Engineer multi-engine OFFLINE fixture — vulnerable profile. Sections consumed by engines as they go active (P2+). P1 skeleton loads and registers all engines.",
+  "_schema_version": "1.0.0",
+  "target": {
+    "url": "https://app-vulnerable.example.invalid",
+    "hostname": "app-vulnerable.example.invalid",
+    "ip": "203.0.113.50"
+  },
+  "network": {
+    "tls_version": "TLSv1.0",
+    "cert_expired": true,
+    "open_ports": [22, 80, 443, 8080, 3306],
+    "dns_spf": null,
+    "dns_dmarc": null,
+    "cdn_waf": false
+  },
+  "data_exposure": {
+    "paths_found": [
+      "/.env",
+      "/.git/config",
+      "/backup/db.sql.gz",
+      "/debug/pprof/"
+    ],
+    "s3_public_buckets": ["customer-uploads-staging"],
+    "robots_disallow_sensitive": false
+  },
+  "api": {
+    "openapi_exposed": true,
+    "admin_paths": ["/admin", "/api/v1/internal/users", "/swagger-ui.html"],
+    "unauthenticated_endpoints": ["/api/v1/users/export", "/api/debug/health"],
+    "rate_limiting": false
+  },
+  "vuln": {
+    "missing_headers": ["Content-Security-Policy", "X-Frame-Options", "Strict-Transport-Security"],
+    "xss_reflected": true,
+    "open_redirect": true,
+    "cookie_flags_missing": ["Secure", "HttpOnly", "SameSite"]
+  },
+  "identity": {
+    "session_fixation_risk": true,
+    "jwt_alg_none_accepted": false,
+    "oauth_state_not_required": true,
+    "mfa_not_enforced": true
+  },
+  "governance": {
+    "security_txt": false,
+    "privacy_policy_linked": false,
+    "server_banner_leak": "Apache/2.4.41 (Ubuntu)",
+    "hsts_max_age": 0
+  },
+  "phishing": {
+    "domain_dmarc_policy": "none",
+    "spf_record_present": false,
+    "dkim_selectors_configured": false,
+    "samples": [
+      {
+        "fixture_id": "bec-invoice-001",
+        "from_display": "CFO Accounts Payable",
+        "from_envelope": "cfo-payable@evil-lookalike.example",
+        "reply_to": "collector@evil-lookalike.example",
+        "return_path_mismatch": true,
+        "spf_result": "fail",
+        "dkim_result": "none",
+        "dmarc_result": "fail",
+        "suspicious_links": ["https://login-micros0ft.example/auth"],
+        "urgency_language": true,
+        "attachment_type": "html"
+      },
+      {
+        "fixture_id": "credential-harvest-002",
+        "from_display": "IT Helpdesk",
+        "from_envelope": "helpdesk@support-portal.example",
+        "spf_result": "softfail",
+        "dkim_result": "fail",
+        "dmarc_result": "fail",
+        "suspicious_links": ["http://app-vulnerable.example.invalid/login?redirect=evil"],
+        "urgency_language": true
+      }
+    ]
+  },
+  "traffic": {
+    "anomaly_spikes": [
+      {"window": "2026-07-30T02:00:00Z", "requests_per_min": 12000, "baseline": 400}
+    ],
+    "geo_impossible_travel": true,
+    "scanner_noise_detected": true
+  },
+  "protocol": {
+    "services": [
+      {"port": 22, "service": "ssh", "version": "OpenSSH_7.6"},
+      {"port": 3306, "service": "mysql", "version": "5.7.32", "exposed_internet": true}
+    ],
+    "deprecated_protocols": ["TLSv1.0", "TLSv1.1"]
+  },
+  "asset": {
+    "subdomains": ["api.app-vulnerable.example.invalid", "staging.app-vulnerable.example.invalid"],
+    "shadow_it_hosts": ["legacy-crm.example.invalid"],
+    "unclaimed_dns": false
+  }
+}
