@@ -5,6 +5,8 @@
 #            TOOL_STANDARDS merge, domain scoring shell.
 # Phase P3: Network (NET) + Data exposure (DATA) engines ACTIVE — embedded
 #            fixture + optional live wrap of ai_network_auditor / ai_data_scout.
+# Phase P4: API (API) + Vuln (VULN) engines ACTIVE — embedded fixture +
+#            optional live wrap of ai_api_scout / ai_vuln_hunter.
 # Enterprise bar: full senior Security Engineer coverage — not a single-scanner toy.
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_security_engineer_pack"
-VERSION = "0.3.0-p3"
+VERSION = "0.4.0-p4"
 DOMAIN = "appsec"
 SUBDOMAIN = "security-engineer/pack"
 SENTINEL = "perimeter"
@@ -474,15 +476,272 @@ def _engine_data_exposure(ctx: PackContext) -> list[dict]:
 
 
 def _engine_api(ctx: PackContext) -> list[dict]:
-    """P4: API surface / OpenAPI / admin paths — wraps ai_api_scout. P1 stub."""
-    _ = ctx
-    return []
+    """API surface / OpenAPI / admin paths — embedded fixture + optional live api_scout wrap."""
+    findings: list[dict] = []
+    api = ctx.section("api") if ctx.fixture else {}
+
+    if api:
+        if api.get("openapi_exposed") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("api"),
+                    "OpenAPI/Swagger specification exposed",
+                    "medium",
+                    "Public OpenAPI or Swagger documentation reveals API structure, endpoints, and schemas to attackers.",
+                    resource={"type": "api_spec", "id": "openapi", "engine": "api"},
+                    evidence={"openapi_exposed": True, "source": "fixture.api.openapi_exposed"},
+                    remediation={
+                        "steps": [
+                            "Remove public Swagger/OpenAPI from production or require authentication.",
+                            "Publish API docs on an internal portal or VPN-only route.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["OWASP API1:2023", "OWASP API2:2023", "NIST AC-3"],
+                    engine="api",
+                    backend="embedded",
+                )
+            )
+
+        for path in api.get("admin_paths") or []:
+            sev = "critical" if path.rstrip("/").endswith((".env", "/.env")) else "high"
+            findings.append(
+                _finding(
+                    ctx.next_id("api"),
+                    f"Sensitive API/admin path exposed: {path}",
+                    sev,
+                    f"Path '{path}' is reachable on the public attack surface (admin panel, internal API, or API docs).",
+                    resource={"type": "url_path", "id": path, "engine": "api"},
+                    evidence={"path": path, "source": "fixture.api.admin_paths"},
+                    remediation={
+                        "steps": [
+                            f"Restrict or remove public access to '{path}'.",
+                            "Move admin and internal APIs behind VPN, Zero Trust, or IP allowlisting.",
+                            "Require MFA for all admin authentication paths.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP API1:2023", "CIS Controls 4.4", "NIST AC-3"],
+                    engine="api",
+                    backend="embedded",
+                )
+            )
+
+        for endpoint in api.get("unauthenticated_endpoints") or []:
+            findings.append(
+                _finding(
+                    ctx.next_id("api"),
+                    f"Unauthenticated API endpoint: {endpoint}",
+                    "high",
+                    f"Endpoint '{endpoint}' may expose data or operations without authentication.",
+                    resource={"type": "api_endpoint", "id": endpoint, "engine": "api"},
+                    evidence={"endpoint": endpoint, "source": "fixture.api.unauthenticated_endpoints"},
+                    remediation={
+                        "steps": [
+                            f"Require authentication and authorization on '{endpoint}'.",
+                            "Add rate limiting and audit logging for sensitive exports.",
+                            "Review API gateway policies for anonymous access.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP API1:2023", "OWASP API2:2023", "SOC 2 CC6.1"],
+                    engine="api",
+                    backend="embedded",
+                )
+            )
+
+        if api.get("rate_limiting") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("api"),
+                    "No API rate limiting detected",
+                    "medium",
+                    "Public API endpoints lack rate limiting — brute-force, scraping, and abuse risk.",
+                    resource={"type": "api_policy", "id": "rate_limiting", "engine": "api"},
+                    evidence={"rate_limiting": False, "source": "fixture.api.rate_limiting"},
+                    remediation={
+                        "steps": [
+                            "Enable rate limiting at API gateway or WAF (per-IP and per-token).",
+                            "Add exponential backoff and lockout for auth endpoints.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP API4:2023", "NIST SC-5"],
+                    engine="api",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_api_scout as ap
+
+            rep = ap.run({"target": ctx.target, "timeout": 60})
+            for f in rep.get("findings") or []:
+                sev = _norm_sev(f.get("severity"), "medium")
+                if sev == "info":
+                    continue
+                findings.append(
+                    _finding(
+                        ctx.next_id("api"),
+                        f.get("title") or "API surface finding",
+                        sev,
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "api", "engine": "api"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_api_scout"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="api",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
+
+
+_VULN_HEADER_SEVERITY: dict[str, str] = {
+    "content-security-policy": "low",
+    "x-frame-options": "medium",
+    "strict-transport-security": "medium",
+    "x-content-type-options": "medium",
+    "referrer-policy": "low",
+    "permissions-policy": "low",
+    "x-xss-protection": "low",
+}
 
 
 def _engine_vuln(ctx: PackContext) -> list[dict]:
-    """P4: OWASP Top 10 — wraps ai_vuln_hunter. P1 stub."""
-    _ = ctx
-    return []
+    """OWASP Top 10 — embedded fixture + optional live vuln_hunter wrap."""
+    findings: list[dict] = []
+    vuln = ctx.section("vuln") if ctx.fixture else {}
+
+    if vuln:
+        for header in vuln.get("missing_headers") or []:
+            hkey = header.strip().lower()
+            sev = _VULN_HEADER_SEVERITY.get(hkey, "medium")
+            findings.append(
+                _finding(
+                    ctx.next_id("vuln"),
+                    f"Missing security header: {header}",
+                    sev,
+                    f"Response lacks '{header}' — increases risk of XSS, clickjacking, or transport downgrade (OWASP A05).",
+                    resource={"type": "http_header", "id": header, "engine": "vuln"},
+                    evidence={"missing_header": header, "source": "fixture.vuln.missing_headers"},
+                    remediation={
+                        "steps": [
+                            f"Add '{header}' to web server or application response headers.",
+                            "Use Sentinel Stacks hardening kit web-server templates.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["OWASP A05:2021 Security Misconfiguration", "NIST SI-7"],
+                    engine="vuln",
+                    backend="embedded",
+                )
+            )
+
+        if vuln.get("xss_reflected") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("vuln"),
+                    "Reflected XSS (Cross-Site Scripting)",
+                    "high",
+                    "User input is reflected unsanitized in HTTP responses (OWASP A03:2021 Injection).",
+                    resource={"type": "web_vuln", "id": "xss_reflected", "engine": "vuln"},
+                    evidence={"xss_reflected": True, "source": "fixture.vuln.xss_reflected"},
+                    remediation={
+                        "steps": [
+                            "Apply context-appropriate output encoding on all user-controlled output.",
+                            "Deploy Content-Security-Policy with unsafe-inline disabled.",
+                            "Use framework auto-escaping (React, Angular, templating engines).",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["OWASP A03:2021 Injection", "CWE-79", "NIST SI-10"],
+                    engine="vuln",
+                    backend="embedded",
+                )
+            )
+
+        if vuln.get("open_redirect") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("vuln"),
+                    "Open Redirect vulnerability",
+                    "medium",
+                    "Application redirects to arbitrary external URLs — phishing and OAuth abuse vector (OWASP A01).",
+                    resource={"type": "web_vuln", "id": "open_redirect", "engine": "vuln"},
+                    evidence={"open_redirect": True, "source": "fixture.vuln.open_redirect"},
+                    remediation={
+                        "steps": [
+                            "Validate redirect targets against an allowlist of trusted domains.",
+                            "Use relative redirects or signed redirect tokens.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP A01:2021 Broken Access Control", "CWE-601"],
+                    engine="vuln",
+                    backend="embedded",
+                )
+            )
+
+        missing_flags = vuln.get("cookie_flags_missing") or []
+        if missing_flags:
+            findings.append(
+                _finding(
+                    ctx.next_id("vuln"),
+                    "Session cookies missing security flags",
+                    "high",
+                    f"Cookies lack required flags: {', '.join(missing_flags)}. Session hijacking and CSRF risk.",
+                    resource={"type": "cookie", "id": "session_flags", "engine": "vuln"},
+                    evidence={
+                        "cookie_flags_missing": missing_flags,
+                        "source": "fixture.vuln.cookie_flags_missing",
+                    },
+                    remediation={
+                        "steps": [
+                            "Set Secure, HttpOnly, and SameSite=Strict (or Lax) on session cookies.",
+                            "Rotate session identifiers after login.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["OWASP A07:2021 Identification and Authentication Failures", "CWE-614"],
+                    engine="vuln",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_vuln_hunter as vh
+
+            rep = vh.run({"target": ctx.target, "timeout": 90})
+            for f in rep.get("findings") or []:
+                sev = _norm_sev(f.get("severity"), "medium")
+                if sev == "info":
+                    continue
+                findings.append(
+                    _finding(
+                        ctx.next_id("vuln"),
+                        f.get("title") or "Vulnerability finding",
+                        sev,
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "vuln", "engine": "vuln"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_vuln_hunter"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="vuln",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
 
 
 def _engine_identity(ctx: PackContext) -> list[dict]:
@@ -888,7 +1147,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "api",
         "code": "API",
         "name": "API Surface & Admin Discovery",
-        "status": "stub",
+        "status": "active",  # P4
         "phase": "P4",
         "preferred_backends": ["httpx", "nuclei", "embedded"],
         "run": _engine_api,
@@ -899,7 +1158,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "vuln",
         "code": "VULN",
         "name": "Application Vulnerabilities (OWASP)",
-        "status": "stub",
+        "status": "active",  # P4
         "phase": "P4",
         "preferred_backends": ["nuclei", "embedded"],
         "run": _engine_vuln,
@@ -1070,14 +1329,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "P3",
-        "label": "phishing_network_data_active",
+        "phase": "P4",
+        "label": "phishing_network_data_api_vuln_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "P4 api + vuln (OWASP) engines",
+        "next_phase": "P5 identity + governance engines",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": False,
     }
@@ -1134,7 +1393,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"Security Engineer pack failed: {err}",
-                "pack_phase": "P3",
+                "pack_phase": "P4",
             },
         }
 
@@ -1245,7 +1504,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "P3",
+            "pack_phase": "P4",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
