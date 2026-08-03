@@ -7,6 +7,8 @@
 #            fixture + optional live wrap of ai_network_auditor / ai_data_scout.
 # Phase P4: API (API) + Vuln (VULN) engines ACTIVE — embedded fixture +
 #            optional live wrap of ai_api_scout / ai_vuln_hunter.
+# Phase P5: Identity (IDENT) + Governance (GOV) engines ACTIVE — embedded
+#            fixture + optional live wrap of ai_identity_guard / ai_governance_mapper.
 # Enterprise bar: full senior Security Engineer coverage — not a single-scanner toy.
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_security_engineer_pack"
-VERSION = "0.4.0-p4"
+VERSION = "0.5.0-p5"
 DOMAIN = "appsec"
 SUBDOMAIN = "security-engineer/pack"
 SENTINEL = "perimeter"
@@ -745,15 +747,276 @@ def _engine_vuln(ctx: PackContext) -> list[dict]:
 
 
 def _engine_identity(ctx: PackContext) -> list[dict]:
-    """P5: session/JWT/OAuth — wraps ai_identity_guard. P1 stub."""
-    _ = ctx
-    return []
+    """Identity/session/JWT/OAuth — embedded fixture + optional live identity_guard wrap."""
+    findings: list[dict] = []
+    ident = ctx.section("identity") if ctx.fixture else {}
+
+    if ident:
+        if ident.get("session_fixation_risk") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("identity"),
+                    "Session fixation risk — session ID not rotated at login",
+                    "high",
+                    "Application may accept pre-authentication session identifiers, enabling session fixation attacks (OWASP A07).",
+                    resource={"type": "session", "id": "session_fixation", "engine": "identity"},
+                    evidence={
+                        "session_fixation_risk": True,
+                        "source": "fixture.identity.session_fixation_risk",
+                    },
+                    remediation={
+                        "steps": [
+                            "Regenerate session ID on successful authentication.",
+                            "Invalidate prior session on privilege elevation.",
+                            "Use framework session middleware with fixation protection enabled.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP A07:2021 Identification Failures", "NIST SC-23", "CWE-384"],
+                    engine="identity",
+                    backend="embedded",
+                )
+            )
+
+        if ident.get("jwt_alg_none_accepted") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("identity"),
+                    "JWT accepts alg:none — unsigned tokens allowed",
+                    "critical",
+                    "Identity layer accepts unsigned JWTs (alg:none), allowing token forgery (OWASP A07).",
+                    resource={"type": "jwt", "id": "alg_none", "engine": "identity"},
+                    evidence={
+                        "jwt_alg_none_accepted": True,
+                        "source": "fixture.identity.jwt_alg_none_accepted",
+                    },
+                    remediation={
+                        "steps": [
+                            "Reject alg:none and enforce RS256/ES256 with key validation.",
+                            "Validate iss, aud, exp, and signature on every request.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["OWASP A07:2021 Identification Failures", "CWE-347", "NIST IA-5"],
+                    engine="identity",
+                    backend="embedded",
+                )
+            )
+
+        if ident.get("oauth_state_not_required") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("identity"),
+                    "OAuth/OIDC flow missing state parameter validation",
+                    "high",
+                    "Authorization flows do not require or validate the state parameter — CSRF and account-linking abuse risk.",
+                    resource={"type": "oauth", "id": "state_missing", "engine": "identity"},
+                    evidence={
+                        "oauth_state_not_required": True,
+                        "source": "fixture.identity.oauth_state_not_required",
+                    },
+                    remediation={
+                        "steps": [
+                            "Generate cryptographically random state per authorization request.",
+                            "Validate state server-side before exchanging authorization codes.",
+                            "Use PKCE for public clients.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP A07:2021 Identification Failures", "CWE-352", "NIST IA-2"],
+                    engine="identity",
+                    backend="embedded",
+                )
+            )
+
+        if ident.get("mfa_not_enforced") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("identity"),
+                    "Multi-factor authentication not enforced",
+                    "high",
+                    "Privileged or user accounts can authenticate with password only — credential stuffing and phishing risk.",
+                    resource={"type": "auth_policy", "id": "mfa", "engine": "identity"},
+                    evidence={
+                        "mfa_not_enforced": True,
+                        "source": "fixture.identity.mfa_not_enforced",
+                    },
+                    remediation={
+                        "steps": [
+                            "Require MFA for all users; step-up MFA for admin and sensitive actions.",
+                            "Disable legacy auth protocols that bypass MFA.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST 800-63B", "SOC 2 CC6.1", "ISO 27001 A.8.5", "CIS Control 6.3"],
+                    engine="identity",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_identity_guard as ig
+
+            rep = ig.run({"target": ctx.target, "timeout": 90})
+            for f in rep.get("findings") or []:
+                sev = _norm_sev(f.get("severity"), "medium")
+                if sev == "info":
+                    continue
+                findings.append(
+                    _finding(
+                        ctx.next_id("identity"),
+                        f.get("title") or "Identity finding",
+                        sev,
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "identity", "engine": "identity"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_identity_guard"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="identity",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
 
 
 def _engine_governance(ctx: PackContext) -> list[dict]:
-    """P5: headers / compliance mapping — wraps ai_governance_mapper. P1 stub."""
-    _ = ctx
-    return []
+    """Governance/compliance headers — embedded fixture + optional live governance_mapper wrap."""
+    findings: list[dict] = []
+    gov = ctx.section("governance") if ctx.fixture else {}
+
+    if gov:
+        if gov.get("security_txt") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("governance"),
+                    "Missing security.txt vulnerability disclosure policy",
+                    "low",
+                    "No /.well-known/security.txt — researchers lack a standard channel to report vulnerabilities (RFC 9116).",
+                    resource={"type": "governance", "id": "security_txt", "engine": "governance"},
+                    evidence={"security_txt": False, "source": "fixture.governance.security_txt"},
+                    remediation={
+                        "steps": [
+                            "Publish /.well-known/security.txt with Contact and Expires fields.",
+                            "Link security contact from footer and internal IR runbooks.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST IR-2", "SOC 2 CC7.1", "ISO 27001 A.8.16"],
+                    engine="governance",
+                    backend="embedded",
+                )
+            )
+
+        if gov.get("privacy_policy_linked") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("governance"),
+                    "Privacy policy / data protection notice not linked",
+                    "low",
+                    "Public site lacks visible privacy or data protection notice — GDPR/SOC 2 transparency gap.",
+                    resource={"type": "governance", "id": "privacy_policy", "engine": "governance"},
+                    evidence={
+                        "privacy_policy_linked": False,
+                        "source": "fixture.governance.privacy_policy_linked",
+                    },
+                    remediation={
+                        "steps": [
+                            "Add footer link to privacy policy and cookie notice.",
+                            "Document lawful basis and data retention for personal data processing.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["GDPR Art. 5", "SOC 2 PI.1.1", "ISO 27001 A.5.1"],
+                    engine="governance",
+                    backend="embedded",
+                )
+            )
+
+        banner = gov.get("server_banner_leak")
+        if banner:
+            findings.append(
+                _finding(
+                    ctx.next_id("governance"),
+                    "Server version information disclosed",
+                    "medium",
+                    f"Response headers or banners expose stack details: '{banner}'. Aids targeted exploitation.",
+                    resource={"type": "http_header", "id": "server_banner", "engine": "governance"},
+                    evidence={
+                        "server_banner_leak": banner,
+                        "source": "fixture.governance.server_banner_leak",
+                    },
+                    remediation={
+                        "steps": [
+                            "Remove or genericize Server and X-Powered-By headers.",
+                            "Strip version tokens at reverse proxy/WAF.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["OWASP A05:2021 Security Misconfiguration", "NIST CM-7", "CWE-200"],
+                    engine="governance",
+                    backend="embedded",
+                )
+            )
+
+        hsts_max = gov.get("hsts_max_age")
+        if hsts_max is not None and int(hsts_max or 0) < 31536000:
+            findings.append(
+                _finding(
+                    ctx.next_id("governance"),
+                    "HSTS missing or max-age too short",
+                    "medium",
+                    f"Strict-Transport-Security max-age is {hsts_max or 0}s (recommended >= 31536000). MITM downgrade risk.",
+                    resource={"type": "http_header", "id": "hsts", "engine": "governance"},
+                    evidence={"hsts_max_age": hsts_max, "source": "fixture.governance.hsts_max_age"},
+                    remediation={
+                        "steps": [
+                            "Set Strict-Transport-Security: max-age=31536000; includeSubDomains; preload.",
+                            "Redirect all HTTP to HTTPS at edge.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST SC-8", "SOC 2 CC6.7", "ISO 27001 A.8.24"],
+                    engine="governance",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_governance_mapper as gm
+
+            rep = gm.run({"target": ctx.target, "timeout": 90})
+            for f in rep.get("findings") or []:
+                sev = _norm_sev(f.get("severity"), "medium")
+                if sev == "info":
+                    continue
+                title = f.get("title") or "Governance finding"
+                if "— PASSED" in title:
+                    continue
+                findings.append(
+                    _finding(
+                        ctx.next_id("governance"),
+                        title.replace(" — FAILED", ""),
+                        sev,
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "governance", "engine": "governance"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_governance_mapper"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="governance",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
 
 
 def _norm_sev(sev: str | None, default: str = "high") -> str:
@@ -1169,7 +1432,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "identity",
         "code": "IDENT",
         "name": "Identity & Session Security",
-        "status": "stub",
+        "status": "active",  # P5
         "phase": "P5",
         "preferred_backends": ["embedded"],
         "run": _engine_identity,
@@ -1180,7 +1443,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "governance",
         "code": "GOV",
         "name": "Governance & Security Headers",
-        "status": "stub",
+        "status": "active",  # P5
         "phase": "P5",
         "preferred_backends": ["embedded"],
         "run": _engine_governance,
@@ -1329,14 +1592,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "P4",
-        "label": "phishing_network_data_api_vuln_active",
+        "phase": "P5",
+        "label": "seven_engine_perimeter_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "P5 identity + governance engines",
+        "next_phase": "P6 traffic + protocol + asset engines",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": False,
     }
@@ -1393,7 +1656,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"Security Engineer pack failed: {err}",
-                "pack_phase": "P4",
+                "pack_phase": "P5",
             },
         }
 
@@ -1504,7 +1767,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "P4",
+            "pack_phase": "P5",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
