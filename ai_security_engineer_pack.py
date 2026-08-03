@@ -3,8 +3,8 @@
 # TOOL_STANDARDS.md v1.0
 # Phase P1: pack skeleton — engine registry, ID scheme, backend detect,
 #            TOOL_STANDARDS merge, domain scoring shell.
-# Phase P2: Phishing (PHISH) engine ACTIVE — embedded fixture + optional
-#            .eml header analysis; SPF/DKIM/DMARC, BEC, link signals.
+# Phase P3: Network (NET) + Data exposure (DATA) engines ACTIVE — embedded
+#            fixture + optional live wrap of ai_network_auditor / ai_data_scout.
 # Enterprise bar: full senior Security Engineer coverage — not a single-scanner toy.
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_security_engineer_pack"
-VERSION = "0.2.0-p2"
+VERSION = "0.3.0-p3"
 DOMAIN = "appsec"
 SUBDOMAIN = "security-engineer/pack"
 SENTINEL = "perimeter"
@@ -39,6 +39,35 @@ TAGS = [
 ]
 
 SEVERITY_WEIGHTS = {"critical": 25, "high": 10, "medium": 4, "low": 1, "info": 0}
+
+# Ports that should not be internet-facing (aligned with ai_network_auditor.py)
+RISKY_PORTS: dict[int, str] = {
+    21: "FTP",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    110: "POP3",
+    135: "RPC",
+    139: "NetBIOS",
+    445: "SMB",
+    1433: "MSSQL",
+    3306: "MySQL",
+    3389: "RDP",
+    5432: "PostgreSQL",
+    5900: "VNC",
+    6379: "Redis",
+    9200: "Elasticsearch",
+    27017: "MongoDB",
+    8080: "HTTP-Alt",
+}
+
+PATH_SEVERITY: dict[str, str] = {
+    "/.env": "critical",
+    "/.git/config": "high",
+    "/.git/HEAD": "high",
+    "/backup/": "critical",
+    "/debug/": "medium",
+}
 
 # ── Finding ID scheme (locked) ───────────────────────────────────────────────
 # PERIM-{ENGINE}-{NNN}
@@ -200,15 +229,248 @@ EngineFn = Callable[[PackContext], list[dict]]
 
 
 def _engine_network(ctx: PackContext) -> list[dict]:
-    """P3: TLS/DNS/ports — wraps ai_network_auditor. P1 stub."""
-    _ = ctx
-    return []
+    """Network perimeter — TLS/DNS/ports; embedded fixture + optional live auditor wrap."""
+    findings: list[dict] = []
+    net = ctx.section("network") if ctx.fixture else {}
+
+    if net:
+        tls_ver = (net.get("tls_version") or "").upper()
+        if tls_ver in ("TLSV1.0", "TLSV1.1", "SSLV3", "SSLV2"):
+            findings.append(
+                _finding(
+                    ctx.next_id("network"),
+                    f"Deprecated TLS protocol: {tls_ver}",
+                    "high",
+                    f"Endpoint negotiates {tls_ver}. PCI and modern browsers deprecate TLS 1.0/1.1.",
+                    resource={"type": "tls", "id": tls_ver, "engine": "network"},
+                    evidence={"tls_version": net.get("tls_version"), "source": "fixture.network.tls_version"},
+                    remediation={
+                        "steps": [
+                            "Disable TLS 1.0/1.1 at load balancer and origin.",
+                            "Enable TLS 1.2+ only; test with SSL Labs.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST 800-53 SC-8", "PCI DSS 4.0"],
+                    engine="network",
+                    backend="embedded",
+                )
+            )
+
+        if net.get("cert_expired") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("network"),
+                    "TLS certificate expired",
+                    "critical",
+                    "The presented certificate is expired. Clients will warn or refuse connections.",
+                    resource={"type": "tls", "id": "cert_expired", "engine": "network"},
+                    evidence={"cert_expired": True, "source": "fixture.network.cert_expired"},
+                    remediation={
+                        "steps": [
+                            "Renew certificate immediately (ACME or CA reissue).",
+                            "Automate renewal; alert 30 days before expiry.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST 800-53 SC-8"],
+                    engine="network",
+                    backend="embedded",
+                )
+            )
+
+        for port in net.get("open_ports") or []:
+            try:
+                pnum = int(port)
+            except (TypeError, ValueError):
+                continue
+            if pnum not in RISKY_PORTS:
+                continue
+            svc = RISKY_PORTS[pnum]
+            sev = "critical" if pnum in (22, 3306, 3389, 445, 27017, 6379, 1433) else "high"
+            if pnum == 8080:
+                sev = "medium"
+            findings.append(
+                _finding(
+                    ctx.next_id("network"),
+                    f"Risky port open to internet: {pnum}/{svc}",
+                    sev,
+                    f"Port {pnum} ({svc}) is reachable on the public attack surface.",
+                    resource={"type": "port", "id": str(pnum), "engine": "network", "service": svc},
+                    evidence={"port": pnum, "service": svc, "source": "fixture.network.open_ports"},
+                    remediation={
+                        "steps": [
+                            f"Close or firewall port {pnum}; restrict to bastion/VPN CIDRs only.",
+                            "Move admin services off the public internet.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST 800-53 SC-7", "CIS Network"],
+                    engine="network",
+                    backend="embedded",
+                )
+            )
+
+        if net.get("cdn_waf") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("network"),
+                    "No CDN/WAF in front of public endpoint",
+                    "medium",
+                    "Traffic hits origin directly without edge WAF/CDN DDoS protection.",
+                    resource={"type": "edge", "id": "cdn_waf", "engine": "network"},
+                    evidence={"cdn_waf": False, "source": "fixture.network.cdn_waf"},
+                    remediation={
+                        "steps": [
+                            "Place a WAF/CDN (Cloudflare, AWS CloudFront+WAF, Azure Front Door) in front.",
+                            "Enable bot management and rate limiting.",
+                        ],
+                        "effort": "medium",
+                    },
+                    engine="network",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_network_auditor as na
+
+            rep = na.run({"target": ctx.target, "timeout": 60})
+            for f in rep.get("findings") or []:
+                findings.append(
+                    _finding(
+                        ctx.next_id("network"),
+                        f.get("title") or "Network finding",
+                        _norm_sev(f.get("severity"), "medium"),
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "network", "engine": "network"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_network_auditor"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="network",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
 
 
 def _engine_data_exposure(ctx: PackContext) -> list[dict]:
-    """P3: data leaks / exposed buckets / .env — wraps ai_data_scout. P1 stub."""
-    _ = ctx
-    return []
+    """Data exposure scout — sensitive paths, public buckets; fixture + live data_scout wrap."""
+    findings: list[dict] = []
+    data = ctx.section("data_exposure") if ctx.fixture else {}
+
+    if data:
+        for path in data.get("paths_found") or []:
+            sev = "medium"
+            for prefix, psev in PATH_SEVERITY.items():
+                if path.startswith(prefix) or prefix.rstrip("/") in path:
+                    sev = psev
+                    break
+            if ".env" in path:
+                sev = "critical"
+            elif ".git" in path:
+                sev = "high"
+            elif "backup" in path or ".sql" in path:
+                sev = "critical"
+            findings.append(
+                _finding(
+                    ctx.next_id("data_exposure"),
+                    f"Sensitive path exposed: {path}",
+                    sev,
+                    f"Public URL path '{path}' matches data-leak patterns (configs, VCS, backups, debug).",
+                    resource={"type": "url_path", "id": path, "engine": "data_exposure"},
+                    evidence={"path": path, "source": "fixture.data_exposure.paths_found"},
+                    remediation={
+                        "steps": [
+                            f"Remove or deny public access to '{path}'.",
+                            "Rotate any secrets that may have been exposed.",
+                            "Add WAF rule blocking sensitive path probes.",
+                        ],
+                        "effort": "high" if sev == "critical" else "medium",
+                    },
+                    compliance=["NIST 800-53 SC-28", "OWASP A02", "SOC 2 CC6.1"],
+                    engine="data_exposure",
+                    backend="embedded",
+                )
+            )
+
+        for bucket in data.get("s3_public_buckets") or []:
+            findings.append(
+                _finding(
+                    ctx.next_id("data_exposure"),
+                    f"Public object storage bucket: {bucket}",
+                    "critical",
+                    f"Bucket/storage account '{bucket}' allows anonymous or public read.",
+                    resource={"type": "storage_bucket", "id": bucket, "engine": "data_exposure"},
+                    evidence={"bucket": bucket, "source": "fixture.data_exposure.s3_public_buckets"},
+                    remediation={
+                        "steps": [
+                            "Enable account/block public access settings.",
+                            "Audit bucket ACLs and policies; remove public principals.",
+                            "Enable access logging and alert on public policy changes.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["NIST 800-53 AC-3", "CIS AWS 2.1"],
+                    engine="data_exposure",
+                    backend="embedded",
+                )
+            )
+
+        if data.get("robots_disallow_sensitive") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("data_exposure"),
+                    "robots.txt does not disallow sensitive paths",
+                    "low",
+                    "Crawlers may index admin/backup/debug paths; defense-in-depth gap.",
+                    resource={"type": "url_path", "id": "/robots.txt", "engine": "data_exposure"},
+                    evidence={
+                        "robots_disallow_sensitive": False,
+                        "source": "fixture.data_exposure.robots_disallow_sensitive",
+                    },
+                    remediation={
+                        "steps": [
+                            "Disallow /admin, /backup, /.git in robots.txt (not a security control alone).",
+                            "Ensure sensitive paths require authentication regardless of robots.",
+                        ],
+                        "effort": "low",
+                    },
+                    engine="data_exposure",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and str(ctx.target).startswith(("http://", "https://")):
+        try:
+            import ai_data_scout as ds
+
+            rep = ds.run({"target": ctx.target, "timeout": 60})
+            for f in rep.get("findings") or []:
+                findings.append(
+                    _finding(
+                        ctx.next_id("data_exposure"),
+                        f.get("title") or "Data exposure finding",
+                        _norm_sev(f.get("severity"), "medium"),
+                        f.get("description") or "",
+                        resource=f.get("resource") or {"type": "data_exposure", "engine": "data_exposure"},
+                        evidence={**(f.get("evidence") or {}), "source": "live.ai_data_scout"},
+                        remediation=f.get("remediation"),
+                        compliance=f.get("compliance"),
+                        engine="data_exposure",
+                        backend="live",
+                    )
+                )
+        except Exception:
+            pass
+    return findings
 
 
 def _engine_api(ctx: PackContext) -> list[dict]:
@@ -604,7 +866,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "network",
         "code": "NET",
         "name": "Network Perimeter (TLS/DNS/Ports)",
-        "status": "stub",
+        "status": "active",  # P3
         "phase": "P3",
         "preferred_backends": ["httpx", "nmap", "openssl", "embedded"],
         "run": _engine_network,
@@ -615,7 +877,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "data_exposure",
         "code": "DATA",
         "name": "Data Exposure & Leak Scout",
-        "status": "stub",
+        "status": "active",  # P3
         "phase": "P3",
         "preferred_backends": ["httpx", "embedded"],
         "run": _engine_data_exposure,
@@ -808,14 +1070,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "P2",
-        "label": "phishing_active",
+        "phase": "P3",
+        "label": "phishing_network_data_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "P3 network + data exposure engines",
+        "next_phase": "P4 api + vuln (OWASP) engines",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": False,
     }
@@ -872,7 +1134,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"Security Engineer pack failed: {err}",
-                "pack_phase": "P2",
+                "pack_phase": "P3",
             },
         }
 
@@ -983,7 +1245,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "P2",
+            "pack_phase": "P3",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [

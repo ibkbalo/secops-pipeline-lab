@@ -327,7 +327,7 @@
     },
     {
       "tool_id": "scan_security_engineer_pack",
-      "version": "0.2.0-p2",
+      "version": "0.3.0-p3",
       "module_file": "ai_security_engineer_pack.py",
       "entry_point": "run",
       "sentinel": "perimeter",
@@ -346,7 +346,7 @@
         "email",
         "appsec",
         "enterprise",
-        "p2-phishing"
+        "p3-network-data"
       ],
       "params": {
         "target": "public URL, label, or fixture JSON",
@@ -366,15 +366,17 @@
         "protocol",
         "asset"
       ],
-      "pack_phase": "P2",
+      "pack_phase": "P3",
       "depends_on": [],
       "active_engines": [
-        "phishing"
+        "phishing",
+        "network",
+        "data_exposure"
       ],
-      "description": "Enterprise Security Engineer multi-engine pack — P2 Phishing (PHISH) active; 9 engines remain stub until P3+.",
+      "description": "Enterprise Security Engineer multi-engine pack — P3 Phishing+Network+Data active; 7 engines remain stub until P4+.",
       "engines_status": {
-        "network": "stub",
-        "data_exposure": "stub",
+        "network": "active",
+        "data_exposure": "active",
         "api": "stub",
         "vuln": "stub",
         "identity": "stub",
