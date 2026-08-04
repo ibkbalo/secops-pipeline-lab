@@ -5,11 +5,12 @@
 #            TOOL_STANDARDS merge, domain scoring shell.
 # Phase A2: Prompt Injection (PI) + LLM API Keys (KEY) engines ACTIVE —
 #            embedded fixture + optional gitleaks/semgrep live backends.
+# Phase A3: RAG Data Leakage (RAG) + Output Filtering (OUT) engines ACTIVE —
+#            embedded fixture (tenant isolation, PII/index, response guards).
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
 #
 # Planned activation (later phases):
-#   A3: rag_data_leakage + output_filtering
 #   A4: agent_tool_abuse + mcp_permissions
 #   A5: model_supply_chain + training_poison
 #   A6: model_governance + inference_hardening → pack hands complete
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.2.0-a2"
+VERSION = "0.3.0-a3"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -381,8 +382,119 @@ def _engine_model_supply_chain(ctx: PackContext) -> list[dict]:
 
 
 def _engine_rag_data_leakage(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A3. RAG over-exposure, PII in indexes, cross-tenant."""
-    return []
+    """RAG data leakage & isolation — embedded fixture (tenant/ACL/PII/index paths)."""
+    findings: list[dict] = []
+    rag = ctx.section("rag_data_leakage") if ctx.fixture else {}
+    if not rag:
+        return findings
+
+    if rag.get("cross_tenant_retrieval") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("rag_data_leakage"),
+                "Cross-tenant retrieval possible in RAG index",
+                "critical",
+                "The retrieval layer can return documents belonging to other tenants. "
+                "This breaks data isolation and can leak confidential knowledge across customers.",
+                resource={"type": "rag_index", "id": "vector_store", "engine": "rag_data_leakage"},
+                evidence={
+                    "cross_tenant_retrieval": True,
+                    "source": "fixture.rag_data_leakage.cross_tenant_retrieval",
+                },
+                remediation={
+                    "steps": [
+                        "Enforce tenant_id (or equivalent) as a hard filter on every retrieval query.",
+                        "Partition indexes per tenant or use row-level security on the vector store.",
+                        "Add red-team tests that attempt cross-tenant document retrieval.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM02:2025", "OWASP LLM06:2025", "NIST AI RMF MAP-2.3", "SOC 2 CC6.1"],
+                engine="rag_data_leakage",
+                backend="embedded",
+            )
+        )
+
+    if rag.get("pii_in_vector_index") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("rag_data_leakage"),
+                "PII detected in vector / RAG index",
+                "critical",
+                "Personally identifiable information is stored or embedded in the retrieval index. "
+                "Chunks can be returned verbatim to unauthorized users or other tenants.",
+                resource={"type": "rag_index", "id": "embeddings", "engine": "rag_data_leakage"},
+                evidence={
+                    "pii_in_vector_index": True,
+                    "source": "fixture.rag_data_leakage.pii_in_vector_index",
+                },
+                remediation={
+                    "steps": [
+                        "Run PII detection before chunking/embedding; redact or tokenize sensitive fields.",
+                        "Exclude high-risk document classes from the index unless explicitly approved.",
+                        "Rotate/rebuild the index after remediation; audit prior retrieval logs.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM02:2025", "NIST 800-53 SI-12", "GDPR Art.32", "SOC 2 CC6.1"],
+                engine="rag_data_leakage",
+                backend="embedded",
+            )
+        )
+
+    if rag.get("document_acl_enforced") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("rag_data_leakage"),
+                "Document ACLs not enforced at retrieval time",
+                "high",
+                "Retrieved chunks are not filtered by the caller's document-level access control list. "
+                "Users may see content they are not authorized to read in the source system.",
+                resource={"type": "rag_pipeline", "id": "acl_filter", "engine": "rag_data_leakage"},
+                evidence={
+                    "document_acl_enforced": False,
+                    "source": "fixture.rag_data_leakage.document_acl_enforced",
+                },
+                remediation={
+                    "steps": [
+                        "Propagate source-system ACLs into chunk metadata and filter at query time.",
+                        "Deny-by-default when ACL metadata is missing.",
+                        "Re-test with users who lack access to indexed sensitive documents.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM02:2025", "NIST 800-53 AC-3", "SOC 2 CC6.1"],
+                engine="rag_data_leakage",
+                backend="embedded",
+            )
+        )
+
+    for path in rag.get("sensitive_paths_indexed") or []:
+        sev = "critical" if any(x in str(path).lower() for x in ("salary", "hr/", "nda", "ssn", "passport")) else "high"
+        findings.append(
+            _finding(
+                ctx.next_id("rag_data_leakage"),
+                f"Sensitive path indexed for RAG: {path}",
+                sev,
+                f"Path '{path}' is included in the RAG corpus. Sensitive business or HR/legal content "
+                "should not be retrieved into model context without explicit approval.",
+                resource={"type": "document_path", "id": path, "engine": "rag_data_leakage"},
+                evidence={"path": path, "source": "fixture.rag_data_leakage.sensitive_paths_indexed"},
+                remediation={
+                    "steps": [
+                        f"Remove '{path}' from the ingestion allowlist / crawl roots.",
+                        "Add path/class denylists for HR, legal, payroll, and secrets directories.",
+                        "Rebuild the index and verify the path no longer appears in retrieval tests.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM02:2025", "NIST 800-53 AC-6", "ISO 27001 A.8.2"],
+                engine="rag_data_leakage",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_agent_tool_abuse(ctx: PackContext) -> list[dict]:
@@ -518,8 +630,118 @@ def _engine_llm_api_keys(ctx: PackContext) -> list[dict]:
 
 
 def _engine_output_filtering(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A3. Missing output filters, PII/code exfil in responses."""
-    return []
+    """Output filtering & response guardrails — embedded fixture."""
+    findings: list[dict] = []
+    out = ctx.section("output_filtering") if ctx.fixture else {}
+    if not out:
+        return findings
+
+    if out.get("pii_redaction") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("output_filtering"),
+                "No PII redaction on model outputs",
+                "high",
+                "Model responses are not scanned/redacted for PII before delivery to clients. "
+                "Names, emails, account numbers, or retrieved PII can leak in chat completions.",
+                resource={"type": "llm_guardrail", "id": "pii_redaction", "engine": "output_filtering"},
+                evidence={"pii_redaction": False, "source": "fixture.output_filtering.pii_redaction"},
+                remediation={
+                    "steps": [
+                        "Add post-generation PII detection and redaction (or block) before response return.",
+                        "Align redaction rules with data-classification policy.",
+                        "Log redaction events for compliance review.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM02:2025", "OWASP LLM06:2025", "NIST 800-53 SI-12", "GDPR Art.32"],
+                engine="output_filtering",
+                backend="embedded",
+            )
+        )
+
+    if out.get("toxic_content_filter") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("output_filtering"),
+                "Toxic / harmful content filter disabled on outputs",
+                "medium",
+                "No toxic, hate, or self-harm content filter is applied to model outputs. "
+                "Unsafe generations may reach end users without escalation.",
+                resource={"type": "llm_guardrail", "id": "toxic_filter", "engine": "output_filtering"},
+                evidence={
+                    "toxic_content_filter": False,
+                    "source": "fixture.output_filtering.toxic_content_filter",
+                },
+                remediation={
+                    "steps": [
+                        "Enable output safety classifiers aligned to your AUP.",
+                        "Block or rewrite high-severity categories; escalate medium for review.",
+                        "Track false-positive rates so safety does not silently degrade UX.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM01:2025", "NIST AI RMF GOVERN-1.2", "SOC 2 CC7.2"],
+                engine="output_filtering",
+                backend="embedded",
+            )
+        )
+
+    if out.get("code_exfil_guard") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("output_filtering"),
+                "No code / secret exfiltration guard on outputs",
+                "high",
+                "Responses are not checked for source-code dumps, credentials, or internal URL/path leakage. "
+                "Models with tool/RAG access can paste sensitive material into the chat channel.",
+                resource={"type": "llm_guardrail", "id": "code_exfil_guard", "engine": "output_filtering"},
+                evidence={
+                    "code_exfil_guard": False,
+                    "source": "fixture.output_filtering.code_exfil_guard",
+                },
+                remediation={
+                    "steps": [
+                        "Detect secrets, private keys, and large code dumps in completions.",
+                        "Block or truncate when internal repo paths / credentials appear.",
+                        "Pair with DLP rules for known internal domains and key formats.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM02:2025", "OWASP LLM06:2025", "NIST 800-53 SC-7"],
+                engine="output_filtering",
+                backend="embedded",
+            )
+        )
+
+    if out.get("max_output_tokens_enforced") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("output_filtering"),
+                "Max output tokens not enforced",
+                "medium",
+                "No hard cap on completion length. Attackers can inflate cost/DoS via long generations "
+                "or coax large data dumps from context.",
+                resource={"type": "llm_config", "id": "max_tokens", "engine": "output_filtering"},
+                evidence={
+                    "max_output_tokens_enforced": False,
+                    "source": "fixture.output_filtering.max_output_tokens_enforced",
+                },
+                remediation={
+                    "steps": [
+                        "Set max_tokens (or equivalent) per route/role with a safe default.",
+                        "Alert on anomalous completion lengths and cost spikes.",
+                        "Re-test that over-limit requests are truncated or rejected.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["OWASP LLM04:2025", "NIST AI RMF MEASURE-2.6"],
+                engine="output_filtering",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_training_poison(ctx: PackContext) -> list[dict]:
@@ -567,7 +789,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "rag_data_leakage",
         "code": "RAG",
         "name": "RAG Data Leakage & Isolation",
-        "status": "stub",
+        "status": "active",  # A3
         "phase": "A3",
         "preferred_backends": ["embedded"],
         "run": _engine_rag_data_leakage,
@@ -597,7 +819,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "output_filtering",
         "code": "OUT",
         "name": "Output Filtering & Response Guardrails",
-        "status": "stub",
+        "status": "active",  # A3
         "phase": "A3",
         "preferred_backends": ["embedded"],
         "run": _engine_output_filtering,
@@ -740,14 +962,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A2",
-        "label": "prompt_injection_llm_keys_active",
+        "phase": "A3",
+        "label": "rag_output_filtering_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A3 activate rag_data_leakage + output_filtering",
+        "next_phase": "A4 activate agent_tool_abuse + mcp_permissions",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -804,7 +1026,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A2",
+                "pack_phase": "A3",
             },
         }
 
@@ -915,7 +1137,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A2",
+            "pack_phase": "A3",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [

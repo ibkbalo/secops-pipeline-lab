@@ -66,7 +66,7 @@ Sentinel Stacks ships **multi-engine role packs** — each one mimics a real sec
 | **Security Engineer** | `ai_security_engineer_pack.py` | ✅ Hands + Remediation (P1–P7) | 53 | [Beginner report (MD)](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) · [PDF download](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.pdf) |
 | DevSecOps | `ai_devsecops_pack.py` | ✅ Hands complete (D1–D6) | 62 | [Report (MD)](docs/DEVSECOPS_PACK_D1_D6_REPORT.md) · [PDF](docs/DEVSECOPS_PACK_D1_D6_REPORT.pdf) |
 | Cloud Security Engineer | `ai_cloud_pack.py` | ✅ Hands complete (C1) | 170 | — |
-| **AI Security Engineer** | `ai_ai_security_pack.py` | 🟡 A2 in progress (2/10 active) | 8 | — |
+| **AI Security Engineer** | `ai_ai_security_pack.py` | 🟡 A3 in progress (4/10 active) | 17 | — |
 
 ### Security Engineer — quick start
 
@@ -85,9 +85,9 @@ python ai_remediation_engine.py .tmp_se_vuln.json
 
 **New to security tooling?** Read the [beginner-friendly P1–P7 build report](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) — it explains what we built, why, and how to verify everything step by step.
 
-### AI Security Engineer — quick start (A2)
+### AI Security Engineer — quick start (A3)
 
-Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). A2 activates **prompt injection + LLM API keys** (8 findings on vulnerable mock).
+Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). A3 adds **RAG leakage + output filtering** (17 findings on vulnerable mock).
 
 ```powershell
 python ai_ai_security_pack.py mock
@@ -97,8 +97,8 @@ python ai_ai_security_pack.py mock
 |--------|------|--------|
 | Prompt injection | PI | ✅ A2 active |
 | LLM API keys | KEY | ✅ A2 active |
-| RAG data leakage | RAG | A3 |
-| Output filtering | OUT | A3 |
+| RAG data leakage | RAG | ✅ A3 active |
+| Output filtering | OUT | ✅ A3 active |
 | Agent tool abuse | AGT | A4 |
 | MCP permissions | MCP | A4 |
 | Model supply chain | MSC | A5 |
@@ -106,7 +106,7 @@ python ai_ai_security_pack.py mock
 | Model governance | GOV | A6 |
 | Inference hardening | INF | A6 |
 
-**Roadmap:** SE/DevSecOps/Cloud Hands ✅ → **AI Security hands (A2)** → Brain → Face.
+**Roadmap:** SE/DevSecOps/Cloud Hands ✅ → **AI Security hands (A3)** → Brain → Face.
 
 ---
 
