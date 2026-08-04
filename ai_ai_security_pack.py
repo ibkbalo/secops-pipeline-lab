@@ -7,11 +7,12 @@
 #            embedded fixture + optional gitleaks/semgrep live backends.
 # Phase A3: RAG Data Leakage (RAG) + Output Filtering (OUT) engines ACTIVE —
 #            embedded fixture (tenant isolation, PII/index, response guards).
+# Phase A4: Agent Tool Abuse (AGT) + MCP Permissions (MCP) engines ACTIVE —
+#            embedded fixture (tool allowlists, SSRF, connector sprawl).
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
 #
 # Planned activation (later phases):
-#   A4: agent_tool_abuse + mcp_permissions
 #   A5: model_supply_chain + training_poison
 #   A6: model_governance + inference_hardening → pack hands complete
 #   A7: FIX_MAP AISEC-* in ai_remediation_engine.py
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.3.0-a3"
+VERSION = "0.4.0-a4"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -498,8 +499,149 @@ def _engine_rag_data_leakage(ctx: PackContext) -> list[dict]:
 
 
 def _engine_agent_tool_abuse(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A4. Unsafe tool/function calling, SSRF/exfil via tools."""
-    return []
+    """Agent tool / function-call abuse — embedded fixture."""
+    findings: list[dict] = []
+    agt = ctx.section("agent_tool_abuse") if ctx.fixture else {}
+    if not agt:
+        return findings
+
+    if agt.get("unrestricted_web_fetch") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("agent_tool_abuse"),
+                "Unrestricted web-fetch tool enabled for agent",
+                "high",
+                "The agent can fetch arbitrary URLs without an allowlist. This enables SSRF, "
+                "credential harvesting from metadata endpoints, and data exfiltration relays.",
+                resource={"type": "agent_tool", "id": "web_fetch", "engine": "agent_tool_abuse"},
+                evidence={
+                    "unrestricted_web_fetch": True,
+                    "source": "fixture.agent_tool_abuse.unrestricted_web_fetch",
+                },
+                remediation={
+                    "steps": [
+                        "Restrict fetch destinations to an explicit domain allowlist.",
+                        "Block link-local, RFC1918, and cloud metadata IP ranges.",
+                        "Require human approval for first-time domains.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM06:2025", "OWASP LLM08:2025", "NIST 800-53 SC-7"],
+                engine="agent_tool_abuse",
+                backend="embedded",
+            )
+        )
+
+    if agt.get("shell_tool_enabled") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("agent_tool_abuse"),
+                "Shell / OS command tool enabled for agent",
+                "critical",
+                "The agent can execute shell commands. Prompt injection or malicious tool args can "
+                "lead to RCE, lateral movement, or host compromise.",
+                resource={"type": "agent_tool", "id": "shell", "engine": "agent_tool_abuse"},
+                evidence={
+                    "shell_tool_enabled": True,
+                    "source": "fixture.agent_tool_abuse.shell_tool_enabled",
+                },
+                remediation={
+                    "steps": [
+                        "Disable shell tools in production agents unless absolutely required.",
+                        "If required, run in a disposable sandbox with no secrets mounted.",
+                        "Require dual control / human approval for every shell invocation.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM06:2025", "OWASP LLM08:2025", "NIST 800-53 CM-7", "SOC 2 CC6.1"],
+                engine="agent_tool_abuse",
+                backend="embedded",
+            )
+        )
+
+    allowlist = agt.get("tool_allowlist")
+    if isinstance(allowlist, list) and len(allowlist) == 0:
+        findings.append(
+            _finding(
+                ctx.next_id("agent_tool_abuse"),
+                "Empty agent tool allowlist (all tools implicitly available)",
+                "high",
+                "No explicit tool allowlist is configured. The agent may invoke any registered tool, "
+                "expanding blast radius after a successful injection.",
+                resource={"type": "agent_config", "id": "tool_allowlist", "engine": "agent_tool_abuse"},
+                evidence={
+                    "tool_allowlist": [],
+                    "source": "fixture.agent_tool_abuse.tool_allowlist",
+                },
+                remediation={
+                    "steps": [
+                        "Define a minimal allowlist of tools per agent role.",
+                        "Deny unknown tools by default; review additions via change control.",
+                        "Document which tools can mutate state vs read-only.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM08:2025", "NIST 800-53 AC-6", "NIST AI RMF GOVERN-1.2"],
+                engine="agent_tool_abuse",
+                backend="embedded",
+            )
+        )
+
+    if agt.get("ssrf_protection") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("agent_tool_abuse"),
+                "No SSRF protection on agent network tools",
+                "high",
+                "Network-capable tools lack SSRF controls. Attackers can pivot to internal services "
+                "or cloud instance metadata via tool arguments.",
+                resource={"type": "agent_tool", "id": "network", "engine": "agent_tool_abuse"},
+                evidence={
+                    "ssrf_protection": False,
+                    "source": "fixture.agent_tool_abuse.ssrf_protection",
+                },
+                remediation={
+                    "steps": [
+                        "Validate and resolve URLs; block private and link-local ranges.",
+                        "Disable following redirects to internal hosts.",
+                        "Use an egress proxy with destination policy for agent traffic.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM06:2025", "OWASP API7:2023", "NIST 800-53 SC-7"],
+                engine="agent_tool_abuse",
+                backend="embedded",
+            )
+        )
+
+    if agt.get("exfil_via_tool_args") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("agent_tool_abuse"),
+                "Data exfiltration via tool arguments possible",
+                "critical",
+                "Sensitive context (secrets, PII, retrieved docs) can be passed into outbound tool "
+                "arguments without inspection. An injected agent can exfiltrate data through tools.",
+                resource={"type": "agent_pipeline", "id": "tool_args", "engine": "agent_tool_abuse"},
+                evidence={
+                    "exfil_via_tool_args": True,
+                    "source": "fixture.agent_tool_abuse.exfil_via_tool_args",
+                },
+                remediation={
+                    "steps": [
+                        "Scan tool arguments for secrets/PII before invocation.",
+                        "Strip or tokenize sensitive fields; prefer opaque resource IDs over raw content.",
+                        "Log and alert on high-entropy or large outbound tool payloads.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM06:2025", "OWASP LLM02:2025", "NIST 800-53 SC-7", "SOC 2 CC6.1"],
+                engine="agent_tool_abuse",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_llm_api_keys(ctx: PackContext) -> list[dict]:
@@ -749,9 +891,117 @@ def _engine_training_poison(ctx: PackContext) -> list[dict]:
     return []
 
 
+_DANGEROUS_MCP_SCOPES = {
+    "read-write-all",
+    "unrestricted-nav",
+    "admin",
+    "*",
+    "full",
+    "read-write",
+}
+
+
 def _engine_mcp_permissions(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A4. MCP/tool permission sprawl, over-privileged connectors."""
-    return []
+    """MCP & tool permission sprawl — embedded fixture."""
+    findings: list[dict] = []
+    mcp = ctx.section("mcp_permissions") if ctx.fixture else {}
+    if not mcp:
+        return findings
+
+    for server in mcp.get("servers") or []:
+        name = server.get("name") or "unknown-mcp"
+        scope = (server.get("scope") or "").lower()
+        approval = server.get("approval_required")
+        dangerous = scope in _DANGEROUS_MCP_SCOPES or "unrestricted" in scope or scope.endswith("-all")
+        if dangerous or approval is False:
+            sev = "critical" if dangerous and approval is False else ("critical" if dangerous else "high")
+            findings.append(
+                _finding(
+                    ctx.next_id("mcp_permissions"),
+                    f"Over-privileged MCP server: {name} (scope={scope or 'unset'})",
+                    sev,
+                    f"MCP server '{name}' is configured with scope '{scope or 'unset'}' "
+                    f"and approval_required={approval}. Broad connector permissions let a compromised "
+                    "agent read/write local files, browse arbitrarily, or abuse linked systems.",
+                    resource={
+                        "type": "mcp_server",
+                        "id": name,
+                        "engine": "mcp_permissions",
+                        "scope": scope,
+                    },
+                    evidence={
+                        "server": server,
+                        "source": "fixture.mcp_permissions.servers",
+                    },
+                    remediation={
+                        "steps": [
+                            f"Narrow '{name}' to the minimum scope required for the use case.",
+                            "Require explicit human approval for sensitive MCP tools.",
+                            "Disable unused MCP servers in production profiles.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP LLM06:2025", "OWASP LLM08:2025", "NIST 800-53 AC-6", "SOC 2 CC6.1"],
+                    engine="mcp_permissions",
+                    backend="embedded",
+                )
+            )
+
+    if mcp.get("least_privilege") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("mcp_permissions"),
+                "MCP connectors not following least privilege",
+                "high",
+                "MCP / tool connectors are not governed by a least-privilege policy. "
+                "Default-open permissions increase blast radius after prompt injection.",
+                resource={"type": "mcp_policy", "id": "least_privilege", "engine": "mcp_permissions"},
+                evidence={
+                    "least_privilege": False,
+                    "source": "fixture.mcp_permissions.least_privilege",
+                },
+                remediation={
+                    "steps": [
+                        "Adopt deny-by-default MCP permission profiles per agent role.",
+                        "Review connector grants quarterly; remove unused scopes.",
+                        "Separate read-only assistants from mutation-capable agents.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["NIST 800-53 AC-6", "OWASP LLM08:2025", "NIST AI RMF GOVERN-1.2"],
+                engine="mcp_permissions",
+                backend="embedded",
+            )
+        )
+
+    if mcp.get("tool_inventory_documented") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("mcp_permissions"),
+                "MCP / tool inventory not documented",
+                "medium",
+                "There is no maintained inventory of MCP servers and tools available to agents. "
+                "Shadow connectors can accumulate without security review.",
+                resource={"type": "mcp_policy", "id": "inventory", "engine": "mcp_permissions"},
+                evidence={
+                    "tool_inventory_documented": False,
+                    "source": "fixture.mcp_permissions.tool_inventory_documented",
+                },
+                remediation={
+                    "steps": [
+                        "Maintain an inventory of MCP servers, scopes, owners, and environments.",
+                        "Require inventory updates in the change process when adding connectors.",
+                        "Alert when a new MCP server appears in runtime configs.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST 800-53 CM-8", "NIST AI RMF GOVERN-1.1", "SOC 2 CC6.1"],
+                engine="mcp_permissions",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_model_governance(ctx: PackContext) -> list[dict]:
@@ -799,7 +1049,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "agent_tool_abuse",
         "code": "AGT",
         "name": "Agent Tool / Function-Call Abuse",
-        "status": "stub",
+        "status": "active",  # A4
         "phase": "A4",
         "preferred_backends": ["semgrep", "embedded"],
         "run": _engine_agent_tool_abuse,
@@ -839,7 +1089,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "mcp_permissions",
         "code": "MCP",
         "name": "MCP & Tool Permission Sprawl",
-        "status": "stub",
+        "status": "active",  # A4
         "phase": "A4",
         "preferred_backends": ["embedded"],
         "run": _engine_mcp_permissions,
@@ -962,14 +1212,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A3",
-        "label": "rag_output_filtering_active",
+        "phase": "A4",
+        "label": "agent_mcp_permissions_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A4 activate agent_tool_abuse + mcp_permissions",
+        "next_phase": "A5 activate model_supply_chain + training_poison",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -1026,7 +1276,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A3",
+                "pack_phase": "A4",
             },
         }
 
@@ -1137,7 +1387,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A3",
+            "pack_phase": "A4",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [

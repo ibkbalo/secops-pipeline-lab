@@ -1,7 +1,7 @@
 {
   "_ai_security_fixture": true,
   "_profile": "vulnerable",
-  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — vulnerable profile. A3 consumes prompt_injection, llm_api_keys, rag_data_leakage, output_filtering; remaining sections activate A4+.",
+  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — vulnerable profile. A4 consumes PI/KEY/RAG/OUT/AGT/MCP; remaining sections activate A5+.",
   "_schema_version": "1.0.0",
   "target": {
     "url": "https://llm-app-vulnerable.example.invalid",

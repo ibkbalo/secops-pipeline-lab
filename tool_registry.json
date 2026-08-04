@@ -395,7 +395,7 @@
     },
     {
       "tool_id": "scan_ai_security_pack",
-      "version": "0.3.0-a3",
+      "version": "0.4.0-a4",
       "module_file": "ai_ai_security_pack.py",
       "entry_point": "run",
       "sentinel": "ai",
@@ -413,7 +413,7 @@
         "agentic",
         "owasp-llm",
         "enterprise",
-        "a3-rag-output"
+        "a4-agent-mcp"
       ],
       "params": {
         "target": "path, label, or fixture JSON",
@@ -433,24 +433,26 @@
         "model_governance",
         "inference_hardening"
       ],
-      "pack_phase": "A3",
+      "pack_phase": "A4",
       "depends_on": [],
       "active_engines": [
         "prompt_injection",
         "llm_api_keys",
         "rag_data_leakage",
-        "output_filtering"
+        "output_filtering",
+        "agent_tool_abuse",
+        "mcp_permissions"
       ],
-      "description": "Enterprise AI Security Engineer multi-engine pack — A3 RAG + Output Filtering active (4/10); 6 engines remain stub until A4+.",
+      "description": "Enterprise AI Security Engineer multi-engine pack — A4 Agent Tools + MCP active (6/10); 4 engines remain stub until A5+.",
       "engines_status": {
         "prompt_injection": "active",
         "model_supply_chain": "stub",
         "rag_data_leakage": "active",
-        "agent_tool_abuse": "stub",
+        "agent_tool_abuse": "active",
         "llm_api_keys": "active",
         "output_filtering": "active",
         "training_poison": "stub",
-        "mcp_permissions": "stub",
+        "mcp_permissions": "active",
         "model_governance": "stub",
         "inference_hardening": "stub"
       },
