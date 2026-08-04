@@ -57,6 +57,38 @@
 
 ---
 
+## 🧑‍💻 Role Agent Packs (Hands Complete)
+
+Sentinel Stacks ships **multi-engine role packs** — each one mimics a real security job title. Every pack outputs the same **TOOL_STANDARDS JSON** format and can feed the **Remediation Sentinel** fix engine.
+
+| Role | Module | Status | Mock findings | Report |
+|------|--------|--------|--------------:|--------|
+| **Security Engineer** | `ai_security_engineer_pack.py` | ✅ Hands + Remediation (P1–P7) | 53 | [Beginner report (MD)](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) · [PDF download](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.pdf) |
+| DevSecOps | `ai_devsecops_pack.py` | ✅ Hands complete (D1–D6) | 62 | [Report (MD)](docs/DEVSECOPS_PACK_D1_D6_REPORT.md) · [PDF](docs/DEVSECOPS_PACK_D1_D6_REPORT.pdf) |
+| Cloud Security Engineer | `ai_cloud_pack.py` | ✅ Hands complete (C1) | 170 | — |
+| AI Security Engineer | *planned* | 🔜 Next | — | — |
+
+### Security Engineer — quick start
+
+The Security Engineer pack runs **10 perimeter engines** (network, API, phishing, identity, and more) in one command:
+
+```powershell
+python ai_security_engineer_pack.py mock
+```
+
+Then turn findings into a hardening kit:
+
+```powershell
+python ai_security_engineer_pack.py mock | Out-File -Encoding utf8 .tmp_se_vuln.json
+python ai_remediation_engine.py .tmp_se_vuln.json
+```
+
+**New to security tooling?** Read the [beginner-friendly P1–P7 build report](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) — it explains what we built, why, and how to verify everything step by step.
+
+**Roadmap:** Hands ✅ → **AI Security hands** (next) → Brain (agent loop) → Face (GUI).
+
+---
+
 ## 🏗️ Technical Architecture Depth
 **"High-Fidelity, Non-Root, Immutable Fortress Construction."**
 

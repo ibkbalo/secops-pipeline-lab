@@ -174,7 +174,7 @@
     },
     {
       "tool_id": "remediate_findings_hardening_kit",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "module_file": "ai_remediation_engine.py",
       "entry_point": "run",
       "sentinel": "remediation",
@@ -327,7 +327,7 @@
     },
     {
       "tool_id": "scan_security_engineer_pack",
-      "version": "0.6.0-p6",
+      "version": "0.7.0-p7",
       "module_file": "ai_security_engineer_pack.py",
       "entry_point": "run",
       "sentinel": "perimeter",
@@ -349,7 +349,8 @@
         "p3-network-data",
         "p4-api-vuln",
         "p5-identity-governance",
-        "p6-traffic-protocol-asset"
+        "p6-traffic-protocol-asset",
+        "p7-remediation-mapped"
       ],
       "params": {
         "target": "public URL, label, or fixture JSON",

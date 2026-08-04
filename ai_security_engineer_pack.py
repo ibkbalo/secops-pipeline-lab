@@ -11,6 +11,7 @@
 #            fixture + optional live wrap of ai_identity_guard / ai_governance_mapper.
 # Phase P6: Traffic (TRF) + Protocol (PRT) + Asset (AST) engines ACTIVE — embedded
 #            fixture (legacy scouts upgraded in-pack; live path reserved for collectors).
+# Phase P7: FIX_MAP PERIM-* in ai_remediation_engine.py (1.4.0) — hands + remediation bar.
 # Enterprise bar: full senior Security Engineer coverage — not a single-scanner toy.
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_security_engineer_pack"
-VERSION = "0.6.0-p6"
+VERSION = "0.7.0-p7"
 DOMAIN = "appsec"
 SUBDOMAIN = "security-engineer/pack"
 SENTINEL = "perimeter"
@@ -1870,14 +1871,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "P6",
-        "label": "pack_hands_complete_all_engines_active",
+        "phase": "P7",
+        "label": "pack_hands_remediation_mapped",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "P7 FIX_MAP PERIM-* entries in ai_remediation_engine.py",
+        "next_phase": "Security Engineer role brain (on request)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -1934,7 +1935,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"Security Engineer pack failed: {err}",
-                "pack_phase": "P6",
+                "pack_phase": "P7",
             },
         }
 
@@ -2045,7 +2046,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "P6",
+            "pack_phase": "P7",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
