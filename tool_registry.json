@@ -392,6 +392,65 @@
       },
       "pack_hands_complete": false,
       "id_scheme": "PERIM-{ENGINE_CODE}-{NNN}"
+    },
+    {
+      "tool_id": "scan_ai_security_pack",
+      "version": "0.1.0-a1",
+      "module_file": "ai_ai_security_pack.py",
+      "entry_point": "run",
+      "sentinel": "ai",
+      "domain": "aisec",
+      "subdomain": "ai-security/pack",
+      "tier": 1,
+      "role": "ai-security-engineer",
+      "tags": [
+        "ai-security",
+        "llm",
+        "multi-engine",
+        "prompt-injection",
+        "rag",
+        "mcp",
+        "agentic",
+        "owasp-llm",
+        "enterprise",
+        "a1-skeleton"
+      ],
+      "params": {
+        "target": "path, label, or fixture JSON",
+        "mock_file": "optional offline multi-engine fixture",
+        "engines": "optional subset list of engine keys",
+        "timeout": 120
+      },
+      "engines": [
+        "prompt_injection",
+        "model_supply_chain",
+        "rag_data_leakage",
+        "agent_tool_abuse",
+        "llm_api_keys",
+        "output_filtering",
+        "training_poison",
+        "mcp_permissions",
+        "model_governance",
+        "inference_hardening"
+      ],
+      "pack_phase": "A1",
+      "depends_on": [],
+      "active_engines": [],
+      "description": "Enterprise AI Security Engineer multi-engine pack — A1 skeleton: 10 engines registered as stub (0 findings). Next: A2 activate prompt_injection + llm_api_keys.",
+      "engines_status": {
+        "prompt_injection": "stub",
+        "model_supply_chain": "stub",
+        "rag_data_leakage": "stub",
+        "agent_tool_abuse": "stub",
+        "llm_api_keys": "stub",
+        "output_filtering": "stub",
+        "training_poison": "stub",
+        "mcp_permissions": "stub",
+        "model_governance": "stub",
+        "inference_hardening": "stub"
+      },
+      "pack_hands_complete": false,
+      "id_scheme": "AISEC-{ENGINE_CODE}-{NNN}"
     }
   ]
 }

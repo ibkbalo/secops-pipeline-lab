@@ -1,0 +1,108 @@
+{
+  "_ai_security_fixture": true,
+  "_profile": "vulnerable",
+  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — vulnerable profile. Sections consumed by engines as they go active (A2+). A1 skeleton loads and registers all engines as stubs (0 findings by design).",
+  "_schema_version": "1.0.0",
+  "target": {
+    "url": "https://llm-app-vulnerable.example.invalid",
+    "hostname": "llm-app-vulnerable.example.invalid",
+    "system": "acme-assistant-v1"
+  },
+  "prompt_injection": {
+    "system_prompt_isolation": false,
+    "indirect_injection_from_docs": true,
+    "jailbreak_filter": false,
+    "samples": [
+      {
+        "fixture_id": "jailbreak-dan-001",
+        "vector": "direct",
+        "payload_class": "role-play-override",
+        "blocked": false
+      },
+      {
+        "fixture_id": "indirect-rag-002",
+        "vector": "indirect",
+        "source": "uploaded_pdf",
+        "payload_class": "instruction-smuggling",
+        "blocked": false
+      }
+    ]
+  },
+  "model_supply_chain": {
+    "model_provenance_attested": false,
+    "weights_from_untrusted_hub": true,
+    "plugin_signing_required": false,
+    "sbom_for_model_artifacts": false
+  },
+  "rag_data_leakage": {
+    "cross_tenant_retrieval": true,
+    "pii_in_vector_index": true,
+    "document_acl_enforced": false,
+    "sensitive_paths_indexed": ["/hr/salaries.csv", "/legal/nda-drafts/"]
+  },
+  "agent_tool_abuse": {
+    "unrestricted_web_fetch": true,
+    "shell_tool_enabled": true,
+    "tool_allowlist": [],
+    "ssrf_protection": false,
+    "exfil_via_tool_args": true
+  },
+  "llm_api_keys": {
+    "tracked_files_with_keys": [
+      {
+        "path": "config/openai.env",
+        "matches": [
+          {"rule": "openai-api-key", "snippet": "sk-proj-REDACTED", "line": 3}
+        ]
+      },
+      {
+        "path": ".github/workflows/ci.yml",
+        "matches": [
+          {"rule": "anthropic-api-key", "snippet": "ANTHROPIC_API_KEY: plaintext", "line": 22}
+        ]
+      }
+    ],
+    "secret_scanning_in_ci": false
+  },
+  "output_filtering": {
+    "pii_redaction": false,
+    "toxic_content_filter": false,
+    "code_exfil_guard": false,
+    "max_output_tokens_enforced": false
+  },
+  "training_poison": {
+    "untrusted_fine_tune_dataset": true,
+    "dataset_provenance_review": false,
+    "poison_sample_detection": false,
+    "human_review_gate": false
+  },
+  "mcp_permissions": {
+    "servers": [
+      {
+        "name": "filesystem",
+        "scope": "read-write-all",
+        "approval_required": false
+      },
+      {
+        "name": "browser",
+        "scope": "unrestricted-nav",
+        "approval_required": false
+      }
+    ],
+    "least_privilege": false,
+    "tool_inventory_documented": false
+  },
+  "model_governance": {
+    "abuse_monitoring": false,
+    "prompt_response_logging_retention_days": 0,
+    "eval_gate_before_prod": false,
+    "acceptable_use_policy_enforced": false
+  },
+  "inference_hardening": {
+    "auth_required": false,
+    "rate_limiting": false,
+    "cost_budget_alerts": false,
+    "public_unauthenticated_endpoint": true,
+    "tls_only": false
+  }
+}

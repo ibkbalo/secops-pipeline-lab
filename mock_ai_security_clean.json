@@ -1,0 +1,76 @@
+{
+  "_ai_security_fixture": true,
+  "_profile": "clean",
+  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — hardened profile. Engines (when active) should emit 0 findings and high domain scores.",
+  "_schema_version": "1.0.0",
+  "target": {
+    "url": "https://llm-app-hardened.example.invalid",
+    "hostname": "llm-app-hardened.example.invalid",
+    "system": "acme-assistant-hardened"
+  },
+  "prompt_injection": {
+    "system_prompt_isolation": true,
+    "indirect_injection_from_docs": false,
+    "jailbreak_filter": true,
+    "samples": []
+  },
+  "model_supply_chain": {
+    "model_provenance_attested": true,
+    "weights_from_untrusted_hub": false,
+    "plugin_signing_required": true,
+    "sbom_for_model_artifacts": true
+  },
+  "rag_data_leakage": {
+    "cross_tenant_retrieval": false,
+    "pii_in_vector_index": false,
+    "document_acl_enforced": true,
+    "sensitive_paths_indexed": []
+  },
+  "agent_tool_abuse": {
+    "unrestricted_web_fetch": false,
+    "shell_tool_enabled": false,
+    "tool_allowlist": ["search_docs", "ticket_lookup"],
+    "ssrf_protection": true,
+    "exfil_via_tool_args": false
+  },
+  "llm_api_keys": {
+    "tracked_files_with_keys": [],
+    "secret_scanning_in_ci": true
+  },
+  "output_filtering": {
+    "pii_redaction": true,
+    "toxic_content_filter": true,
+    "code_exfil_guard": true,
+    "max_output_tokens_enforced": true
+  },
+  "training_poison": {
+    "untrusted_fine_tune_dataset": false,
+    "dataset_provenance_review": true,
+    "poison_sample_detection": true,
+    "human_review_gate": true
+  },
+  "mcp_permissions": {
+    "servers": [
+      {
+        "name": "docs-readonly",
+        "scope": "read-docs",
+        "approval_required": true
+      }
+    ],
+    "least_privilege": true,
+    "tool_inventory_documented": true
+  },
+  "model_governance": {
+    "abuse_monitoring": true,
+    "prompt_response_logging_retention_days": 90,
+    "eval_gate_before_prod": true,
+    "acceptable_use_policy_enforced": true
+  },
+  "inference_hardening": {
+    "auth_required": true,
+    "rate_limiting": true,
+    "cost_budget_alerts": true,
+    "public_unauthenticated_endpoint": false,
+    "tls_only": true
+  }
+}
