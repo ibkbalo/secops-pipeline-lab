@@ -327,7 +327,7 @@
     },
     {
       "tool_id": "scan_security_engineer_pack",
-      "version": "0.5.0-p5",
+      "version": "0.6.0-p6",
       "module_file": "ai_security_engineer_pack.py",
       "entry_point": "run",
       "sentinel": "perimeter",
@@ -348,7 +348,8 @@
         "enterprise",
         "p3-network-data",
         "p4-api-vuln",
-        "p5-identity-governance"
+        "p5-identity-governance",
+        "p6-traffic-protocol-asset"
       ],
       "params": {
         "target": "public URL, label, or fixture JSON",

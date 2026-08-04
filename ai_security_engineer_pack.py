@@ -9,6 +9,8 @@
 #            optional live wrap of ai_api_scout / ai_vuln_hunter.
 # Phase P5: Identity (IDENT) + Governance (GOV) engines ACTIVE — embedded
 #            fixture + optional live wrap of ai_identity_guard / ai_governance_mapper.
+# Phase P6: Traffic (TRF) + Protocol (PRT) + Asset (AST) engines ACTIVE — embedded
+#            fixture (legacy scouts upgraded in-pack; live path reserved for collectors).
 # Enterprise bar: full senior Security Engineer coverage — not a single-scanner toy.
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_security_engineer_pack"
-VERSION = "0.5.0-p5"
+VERSION = "0.6.0-p6"
 DOMAIN = "appsec"
 SUBDOMAIN = "security-engineer/pack"
 SENTINEL = "perimeter"
@@ -1365,21 +1367,297 @@ def _engine_phishing(ctx: PackContext) -> list[dict]:
 
 
 def _engine_traffic(ctx: PackContext) -> list[dict]:
-    """P6: traffic anomaly / log patterns — upgrade legacy traffic scout. P1 stub."""
-    _ = ctx
-    return []
+    """Traffic anomaly / log patterns — embedded fixture (legacy traffic scout upgraded in-pack)."""
+    findings: list[dict] = []
+    traffic = ctx.section("traffic") if ctx.fixture else {}
+
+    if traffic:
+        for spike in traffic.get("anomaly_spikes") or []:
+            rpm = spike.get("requests_per_min") or 0
+            baseline = spike.get("baseline") or 1
+            ratio = rpm / baseline if baseline else rpm
+            sev = "critical" if ratio >= 10 else "high" if ratio >= 3 else "medium"
+            window = spike.get("window") or "unknown"
+            findings.append(
+                _finding(
+                    ctx.next_id("traffic"),
+                    f"Traffic anomaly spike: {rpm}/min vs baseline {baseline}/min",
+                    sev,
+                    f"Observed {rpm} requests/min against baseline {baseline}/min at {window}. Possible DDoS, brute-force, or scraper burst.",
+                    resource={"type": "traffic_window", "id": window, "engine": "traffic"},
+                    evidence={
+                        "window": window,
+                        "requests_per_min": rpm,
+                        "baseline": baseline,
+                        "ratio": round(ratio, 2),
+                        "source": "fixture.traffic.anomaly_spikes",
+                    },
+                    remediation={
+                        "steps": [
+                            "Enable rate limiting and WAF bot management at the edge.",
+                            "Alert on >3x baseline RPS for 5+ minutes; auto-scale or block abusive IPs.",
+                            "Correlate with auth logs for credential-stuffing patterns.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST SC-5", "SOC 2 CC7.2", "CIS Control 13"],
+                    engine="traffic",
+                    backend="embedded",
+                )
+            )
+
+        if traffic.get("geo_impossible_travel") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("traffic"),
+                    "Impossible geo travel detected in session traffic",
+                    "high",
+                    "Same identity authenticated from distant geographies within an implausible time window — possible credential compromise.",
+                    resource={"type": "traffic_pattern", "id": "geo_impossible_travel", "engine": "traffic"},
+                    evidence={
+                        "geo_impossible_travel": True,
+                        "source": "fixture.traffic.geo_impossible_travel",
+                    },
+                    remediation={
+                        "steps": [
+                            "Force step-up MFA and session revocation for affected accounts.",
+                            "Tune SIEM geo-velocity rules; block high-risk country logins.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST AC-2", "NIST SI-4", "ISO 27001 A.8.16"],
+                    engine="traffic",
+                    backend="embedded",
+                )
+            )
+
+        if traffic.get("scanner_noise_detected") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("traffic"),
+                    "Automated scanner noise in traffic logs",
+                    "medium",
+                    "High-volume probing patterns (404 storms, vuln scanner fingerprints) detected — reconnaissance against the perimeter.",
+                    resource={"type": "traffic_pattern", "id": "scanner_noise", "engine": "traffic"},
+                    evidence={
+                        "scanner_noise_detected": True,
+                        "source": "fixture.traffic.scanner_noise_detected",
+                    },
+                    remediation={
+                        "steps": [
+                            "Block repeat offender IPs at WAF; enable managed bot rules.",
+                            "Harden default-deny on admin paths; monitor 404 rate anomalies.",
+                        ],
+                        "effort": "low",
+                    },
+                    compliance=["NIST SI-4", "SOC 2 CC6.6"],
+                    engine="traffic",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    return findings
 
 
 def _engine_protocol(ctx: PackContext) -> list[dict]:
-    """P6: protocol fingerprint — upgrade legacy protocol scout. P1 stub."""
-    _ = ctx
-    return []
+    """Protocol fingerprint / service ID — embedded fixture (legacy protocol scout upgraded in-pack)."""
+    findings: list[dict] = []
+    proto = ctx.section("protocol") if ctx.fixture else {}
+
+    if proto:
+        for svc in proto.get("services") or []:
+            port = svc.get("port")
+            service = svc.get("service") or "unknown"
+            version = svc.get("version") or "unknown"
+            exposed = svc.get("exposed_internet") is True
+            if not exposed:
+                continue
+            if port in (80, 443) and service in ("http", "https", "ssl", "http-proxy"):
+                continue
+            sev = "critical" if port in (3306, 5432, 6379, 27017, 1433) else "high"
+            if port == 22:
+                sev = "high"
+            elif port == 443:
+                sev = "low"
+            findings.append(
+                _finding(
+                    ctx.next_id("protocol"),
+                    f"Internet-exposed service: {service} on port {port} ({version})",
+                    sev,
+                    f"Service '{service}' version '{version}' on port {port} is reachable from the public internet.",
+                    resource={
+                        "type": "service",
+                        "id": f"{port}/{service}",
+                        "engine": "protocol",
+                        "port": port,
+                        "service": service,
+                    },
+                    evidence={
+                        **svc,
+                        "source": "fixture.protocol.services",
+                    },
+                    remediation={
+                        "steps": [
+                            f"Remove public exposure for port {port}; restrict to bastion/VPN CIDRs.",
+                            "Patch or upgrade disclosed service versions.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST SC-7", "CIS Network", "OWASP A06:2021"],
+                    engine="protocol",
+                    backend="embedded",
+                )
+            )
+
+        for dep in proto.get("deprecated_protocols") or []:
+            findings.append(
+                _finding(
+                    ctx.next_id("protocol"),
+                    f"Deprecated protocol in use: {dep}",
+                    "medium",
+                    f"Negotiation or service banner indicates deprecated protocol '{dep}'. Upgrade to TLS 1.2+ and disable legacy ciphers.",
+                    resource={"type": "protocol", "id": dep, "engine": "protocol"},
+                    evidence={"deprecated_protocol": dep, "source": "fixture.protocol.deprecated_protocols"},
+                    remediation={
+                        "steps": [
+                            f"Disable {dep} at load balancer and origin.",
+                            "Verify with SSL Labs or testssl.sh after change.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST SC-8", "PCI DSS 4.0", "CIS Control 9"],
+                    engine="protocol",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    if ctx.mode == "live" and ctx.backends.get("nmap", {}).get("available"):
+        host = str(ctx.target)
+        if host.startswith(("http://", "https://")):
+            from urllib.parse import urlparse
+
+            host = urlparse(host).hostname or host
+        try:
+            p = subprocess.run(
+                ["nmap", "-sV", "-T4", "--top-ports", "100", host],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if p.returncode == 0 and p.stdout:
+                for line in p.stdout.splitlines():
+                    m = re.match(r"^(\d+)/tcp\s+open\s+(\S+)\s*(.*)$", line.strip())
+                    if not m:
+                        continue
+                    port = int(m.group(1))
+                    service = m.group(2)
+                    version = (m.group(3) or "").strip()
+                    if port not in RISKY_PORTS:
+                        continue
+                    sev = "critical" if port in (3306, 3389, 445, 6379, 27017) else "high"
+                    findings.append(
+                        _finding(
+                            ctx.next_id("protocol"),
+                            f"Nmap: risky service {service} on port {port}",
+                            sev,
+                            f"Live nmap detected {service} {version} on port {port}.",
+                            resource={"type": "service", "id": f"{port}/{service}", "engine": "protocol"},
+                            evidence={
+                                "port": port,
+                                "service": service,
+                                "version": version,
+                                "source": "live.nmap",
+                            },
+                            engine="protocol",
+                            backend="nmap",
+                        )
+                    )
+        except Exception:
+            pass
+    return findings
 
 
 def _engine_asset(ctx: PackContext) -> list[dict]:
-    """P6: external attack surface / asset discovery. P1 stub."""
-    _ = ctx
-    return []
+    """External attack surface / asset discovery — embedded fixture (legacy asset scout upgraded in-pack)."""
+    findings: list[dict] = []
+    asset = ctx.section("asset") if ctx.fixture else {}
+
+    if asset:
+        shadow = asset.get("shadow_it_hosts") or []
+        for host in shadow:
+            findings.append(
+                _finding(
+                    ctx.next_id("asset"),
+                    f"Shadow IT / unapproved host: {host}",
+                    "high",
+                    f"Host '{host}' is not in the approved asset inventory but appears on the attack surface.",
+                    resource={"type": "host", "id": host, "engine": "asset"},
+                    evidence={"host": host, "source": "fixture.asset.shadow_it_hosts"},
+                    remediation={
+                        "steps": [
+                            f"Validate ownership of '{host}'; decommission or bring under change control.",
+                            "Update CMDB and DNS inventory; block if unauthorized.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST CM-8", "SOC 2 CC6.1", "ISO 27001 A.8.1"],
+                    engine="asset",
+                    backend="embedded",
+                )
+            )
+
+        subs = asset.get("subdomains") or []
+        if len(subs) > 1:
+            findings.append(
+                _finding(
+                    ctx.next_id("asset"),
+                    f"Expanded subdomain attack surface ({len(subs)} hosts)",
+                    "medium",
+                    f"Multiple subdomains discovered: {', '.join(subs)}. Each adds DNS/TLS/admin exposure to monitor.",
+                    resource={"type": "dns", "id": "subdomains", "engine": "asset"},
+                    evidence={"subdomains": subs, "count": len(subs), "source": "fixture.asset.subdomains"},
+                    remediation={
+                        "steps": [
+                            "Inventory all subdomains; remove dangling DNS and unused hosts.",
+                            "Apply consistent WAF/TLS policy across every public hostname.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST CM-8", "OWASP ASVS V1"],
+                    engine="asset",
+                    backend="embedded",
+                )
+            )
+
+        if asset.get("unclaimed_dns") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("asset"),
+                    "Unclaimed / dangling DNS records detected",
+                    "high",
+                    "DNS points to deprovisioned or third-party resources — subdomain takeover risk.",
+                    resource={"type": "dns", "id": "unclaimed_dns", "engine": "asset"},
+                    evidence={"unclaimed_dns": True, "source": "fixture.asset.unclaimed_dns"},
+                    remediation={
+                        "steps": [
+                            "Remove stale CNAME/A records or reclaim the target resource.",
+                            "Run monthly dangling-DNS audits.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["NIST CM-8", "CIS Control 3"],
+                    engine="asset",
+                    backend="embedded",
+                )
+            )
+
+        return findings
+
+    return findings
 
 
 # Single source of truth — grow without rebuilding the facade
@@ -1465,7 +1743,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "traffic",
         "code": "TRF",
         "name": "Traffic Anomaly Detection",
-        "status": "stub",
+        "status": "active",  # P6
         "phase": "P6",
         "preferred_backends": ["embedded"],
         "run": _engine_traffic,
@@ -1476,7 +1754,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "protocol",
         "code": "PRT",
         "name": "Protocol Fingerprint & Service ID",
-        "status": "stub",
+        "status": "active",  # P6
         "phase": "P6",
         "preferred_backends": ["nmap", "embedded"],
         "run": _engine_protocol,
@@ -1487,7 +1765,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "asset",
         "code": "AST",
         "name": "External Attack Surface & Assets",
-        "status": "stub",
+        "status": "active",  # P6
         "phase": "P6",
         "preferred_backends": ["httpx", "embedded"],
         "run": _engine_asset,
@@ -1592,16 +1870,16 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "P5",
-        "label": "seven_engine_perimeter_active",
+        "phase": "P6",
+        "label": "pack_hands_complete_all_engines_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "P6 traffic + protocol + asset engines",
+        "next_phase": "P7 FIX_MAP PERIM-* entries in ai_remediation_engine.py",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
-        "pack_hands_complete": False,
+        "pack_hands_complete": active == total and stub == 0,
     }
 
 
@@ -1656,7 +1934,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"Security Engineer pack failed: {err}",
-                "pack_phase": "P5",
+                "pack_phase": "P6",
             },
         }
 
@@ -1767,7 +2045,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "P5",
+            "pack_phase": "P6",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
