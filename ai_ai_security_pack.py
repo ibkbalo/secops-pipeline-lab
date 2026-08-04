@@ -3,12 +3,12 @@
 # TOOL_STANDARDS.md v1.0
 # Phase A1: pack skeleton — engine registry, ID scheme, backend detect,
 #            TOOL_STANDARDS merge, domain scoring shell.
-#            All 10 engines registered as STUB (0 findings by design).
+# Phase A2: Prompt Injection (PI) + LLM API Keys (KEY) engines ACTIVE —
+#            embedded fixture + optional gitleaks/semgrep live backends.
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
 #
 # Planned activation (later phases):
-#   A2: prompt_injection + llm_api_keys
 #   A3: rag_data_leakage + output_filtering
 #   A4: agent_tool_abuse + mcp_permissions
 #   A5: model_supply_chain + training_poison
@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.1.0-a1"
+VERSION = "0.2.0-a2"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -203,9 +204,175 @@ def _finding(
 EngineFn = Callable[[PackContext], list[dict]]
 
 
+def _sev_for_llm_key_rule(rule: str) -> str:
+    r = (rule or "").lower()
+    if any(x in r for x in ("openai", "anthropic", "azure-openai", "gemini", "cohere", "huggingface", "hf-")):
+        return "critical"
+    if any(x in r for x in ("api-key", "apikey", "token", "secret", "bearer")):
+        return "high"
+    return "high"
+
+
 def _engine_prompt_injection(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A2. Direct/indirect prompt injection & jailbreaks."""
-    return []
+    """Prompt injection & jailbreak — embedded fixture + optional live config patterns."""
+    findings: list[dict] = []
+    pi = ctx.section("prompt_injection") if ctx.fixture else {}
+
+    if pi:
+        if pi.get("system_prompt_isolation") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("prompt_injection"),
+                    "System prompt not isolated from user/tool content",
+                    "critical",
+                    "System instructions are not cryptographically or structurally isolated from "
+                    "user messages and retrieved documents. Attackers can override policy via injection.",
+                    resource={"type": "llm_config", "id": "system_prompt", "engine": "prompt_injection"},
+                    evidence={
+                        "system_prompt_isolation": False,
+                        "source": "fixture.prompt_injection.system_prompt_isolation",
+                    },
+                    remediation={
+                        "steps": [
+                            "Separate system instructions from user/RAG content (structured roles, not concatenated plain text).",
+                            "Apply instruction hierarchy / privileged system channel where the platform supports it.",
+                            "Add regression tests for known override payloads before production.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["OWASP LLM01:2025", "NIST AI RMF MAP-2.3", "NIST 800-53 SI-10"],
+                    engine="prompt_injection",
+                    backend="embedded",
+                )
+            )
+
+        if pi.get("indirect_injection_from_docs") is True:
+            findings.append(
+                _finding(
+                    ctx.next_id("prompt_injection"),
+                    "Indirect prompt injection via retrieved documents enabled",
+                    "critical",
+                    "Documents ingested into RAG/context can carry hidden instructions that the model may obey. "
+                    "No durable separation between trusted instructions and untrusted content was detected.",
+                    resource={"type": "rag_pipeline", "id": "document_ingestion", "engine": "prompt_injection"},
+                    evidence={
+                        "indirect_injection_from_docs": True,
+                        "source": "fixture.prompt_injection.indirect_injection_from_docs",
+                    },
+                    remediation={
+                        "steps": [
+                            "Treat all retrieved content as untrusted data, never as instructions.",
+                            "Strip or quarantine instruction-like markup from ingested docs.",
+                            "Require human approval for high-impact tool calls triggered after retrieval.",
+                        ],
+                        "effort": "high",
+                    },
+                    compliance=["OWASP LLM01:2025", "OWASP LLM02:2025", "NIST AI RMF MEASURE-2.6"],
+                    engine="prompt_injection",
+                    backend="embedded",
+                )
+            )
+
+        if pi.get("jailbreak_filter") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("prompt_injection"),
+                    "Jailbreak / policy-bypass filter disabled",
+                    "high",
+                    "No jailbreak or role-play override filter is enforced on inbound prompts. "
+                    "Classic DAN-style and instruction-smuggling payloads can reach the model.",
+                    resource={"type": "llm_guardrail", "id": "jailbreak_filter", "engine": "prompt_injection"},
+                    evidence={
+                        "jailbreak_filter": False,
+                        "source": "fixture.prompt_injection.jailbreak_filter",
+                    },
+                    remediation={
+                        "steps": [
+                            "Enable inbound prompt classifiers for jailbreak / policy-bypass patterns.",
+                            "Block or escalate known role-play override classes before model invoke.",
+                            "Log blocked attempts for abuse monitoring.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP LLM01:2025", "NIST AI RMF GOVERN-1.2"],
+                    engine="prompt_injection",
+                    backend="embedded",
+                )
+            )
+
+        for sample in pi.get("samples") or []:
+            if sample.get("blocked") is True:
+                continue
+            sid = sample.get("fixture_id") or "sample"
+            vector = sample.get("vector") or "unknown"
+            payload_class = sample.get("payload_class") or "unclassified"
+            sev = "critical" if vector == "indirect" else "high"
+            findings.append(
+                _finding(
+                    ctx.next_id("prompt_injection"),
+                    f"Unblocked injection sample: {sid} ({payload_class})",
+                    sev,
+                    f"Fixture sample '{sid}' (vector={vector}, class={payload_class}) was not blocked. "
+                    f"Source hint: {sample.get('source') or 'direct prompt'}.",
+                    resource={
+                        "type": "injection_sample",
+                        "id": sid,
+                        "engine": "prompt_injection",
+                        "vector": vector,
+                    },
+                    evidence={
+                        "sample": sample,
+                        "source": "fixture.prompt_injection.samples",
+                    },
+                    remediation={
+                        "steps": [
+                            f"Add detection/blocking for payload class '{payload_class}'.",
+                            "Include this sample in the red-team / eval suite before each model release.",
+                            "Re-run scan_ai_security_pack prompt_injection engine to verify block=true.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP LLM01:2025", "NIST AI RMF MEASURE-2.7"],
+                    engine="prompt_injection",
+                    backend="embedded",
+                )
+            )
+        return findings
+
+    # Live fallback: look for common weak prompt-assembly patterns in code
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            pattern = re.compile(
+                r"(system_prompt\s*\+|f[\"'].*system.*\{.*user|ignore previous instructions)",
+                re.I,
+            )
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix.lower() not in {".py", ".ts", ".js", ".tsx", ".jsx"}:
+                    continue
+                if any(p in path.parts for p in (".git", "node_modules", "__pycache__", ".venv", "venv")):
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                if pattern.search(text):
+                    findings.append(
+                        _finding(
+                            ctx.next_id("prompt_injection"),
+                            f"Risky prompt assembly pattern in {path.name}",
+                            "medium",
+                            f"File '{path.as_posix()}' appears to concatenate or interpolate user content "
+                            "into privileged prompt strings without isolation.",
+                            resource={"type": "file", "id": str(path), "engine": "prompt_injection"},
+                            evidence={"path": str(path), "source": "live.prompt_assembly_scan"},
+                            engine="prompt_injection",
+                            backend="embedded",
+                        )
+                    )
+                    if len(findings) >= 5:
+                        break
+    return findings
 
 
 def _engine_model_supply_chain(ctx: PackContext) -> list[dict]:
@@ -224,8 +391,130 @@ def _engine_agent_tool_abuse(ctx: PackContext) -> list[dict]:
 
 
 def _engine_llm_api_keys(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A2. Provider API keys in code/env/CI."""
-    return []
+    """LLM provider API key exposure — embedded fixture + optional gitleaks / live scan."""
+    findings: list[dict] = []
+    keys = ctx.section("llm_api_keys") if ctx.fixture else {}
+
+    if keys:
+        for item in keys.get("tracked_files_with_keys") or []:
+            path = item.get("path") or "unknown"
+            for m in item.get("matches") or []:
+                rule = m.get("rule") or "llm-api-key"
+                sev = _sev_for_llm_key_rule(rule)
+                line = m.get("line")
+                snippet = (m.get("snippet") or "")[:120]
+                findings.append(
+                    _finding(
+                        ctx.next_id("llm_api_keys"),
+                        f"LLM provider key in tracked file: {rule}",
+                        sev,
+                        f"Tracked path '{path}' contains an LLM provider credential matched by rule '{rule}'. "
+                        "Remove from VCS, rotate the key, and block future commits.",
+                        resource={
+                            "type": "file",
+                            "id": path,
+                            "engine": "llm_api_keys",
+                            "line": line,
+                        },
+                        evidence={
+                            "path": path,
+                            "line": line,
+                            "rule": rule,
+                            "snippet": snippet,
+                            "source": "fixture.llm_api_keys.tracked_files_with_keys",
+                        },
+                        remediation={
+                            "steps": [
+                                f"Remove '{path}' from the working tree and git history (filter-repo/BFG).",
+                                "Rotate the exposed key in the provider console immediately.",
+                                "Store keys in a secret manager / CI secret store — never in tracked files.",
+                                "Enable push protection / secret scanning for OpenAI/Anthropic patterns.",
+                            ],
+                            "effort": "high",
+                        },
+                        compliance=[
+                            "OWASP LLM10:2025",
+                            "NIST 800-53 IA-5",
+                            "SOC 2 CC6.1",
+                            "ISO 27001 A.9.4.3",
+                        ],
+                        engine="llm_api_keys",
+                        backend="embedded",
+                    )
+                )
+
+        if keys.get("secret_scanning_in_ci") is False:
+            findings.append(
+                _finding(
+                    ctx.next_id("llm_api_keys"),
+                    "Secret scanning for LLM keys disabled in CI",
+                    "high",
+                    "CI does not enforce secret scanning / push protection for LLM provider API keys. "
+                    "Accidental commits of sk- / ANTHROPIC_API_KEY material may reach the remote.",
+                    resource={"type": "ci_gate", "id": "secret_scanning", "engine": "llm_api_keys"},
+                    evidence={
+                        "secret_scanning_in_ci": False,
+                        "source": "fixture.llm_api_keys.secret_scanning_in_ci",
+                    },
+                    remediation={
+                        "steps": [
+                            "Enable repository secret scanning and push protection.",
+                            "Add gitleaks/trufflehog (or equivalent) as a required CI check.",
+                            "Block merges when LLM provider key patterns are detected.",
+                        ],
+                        "effort": "medium",
+                    },
+                    compliance=["OWASP LLM10:2025", "CIS Software Supply Chain 2.4", "NIST 800-53 SI-2"],
+                    engine="llm_api_keys",
+                    backend="embedded",
+                )
+            )
+        return findings
+
+    # Live fallback: scan common file types for provider key patterns
+    if ctx.mode == "live":
+        root = Path(ctx.target)
+        if root.is_dir():
+            key_re = re.compile(
+                r"(sk-[A-Za-z0-9_\-]{20,}|ANTHROPIC_API_KEY\s*[:=]\s*\S+|"
+                r"OPENAI_API_KEY\s*[:=]\s*\S+|AIza[0-9A-Za-z_\-]{20,})",
+                re.I,
+            )
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in {
+                    ".env", ".yml", ".yaml", ".json", ".py", ".ts", ".js", ".toml", ".ini", ".txt",
+                } and path.name not in {".env", ".env.local", ".env.production"}:
+                    continue
+                if any(p in path.parts for p in (".git", "node_modules", "__pycache__", ".venv", "venv")):
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                for m in key_re.finditer(text):
+                    snippet = m.group(0)[:40] + "..."
+                    findings.append(
+                        _finding(
+                            ctx.next_id("llm_api_keys"),
+                            f"Possible LLM API key material in {path.name}",
+                            "critical",
+                            f"Live scan matched provider key-like material in '{path.as_posix()}'. "
+                            "Rotate if real; move to a secret store.",
+                            resource={"type": "file", "id": str(path), "engine": "llm_api_keys"},
+                            evidence={
+                                "path": str(path),
+                                "snippet": snippet,
+                                "source": "live.llm_key_scan",
+                            },
+                            engine="llm_api_keys",
+                            backend="embedded",
+                        )
+                    )
+                    if len(findings) >= 10:
+                        return findings
+    return findings
 
 
 def _engine_output_filtering(ctx: PackContext) -> list[dict]:
@@ -258,7 +547,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "prompt_injection",
         "code": "PI",
         "name": "Prompt Injection & Jailbreak",
-        "status": "stub",
+        "status": "active",  # A2
         "phase": "A2",
         "preferred_backends": ["semgrep", "embedded"],
         "run": _engine_prompt_injection,
@@ -298,7 +587,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "llm_api_keys",
         "code": "KEY",
         "name": "LLM Provider API Key Exposure",
-        "status": "stub",
+        "status": "active",  # A2
         "phase": "A2",
         "preferred_backends": ["gitleaks", "embedded"],
         "run": _engine_llm_api_keys,
@@ -451,14 +740,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A1",
-        "label": "pack_skeleton",
+        "phase": "A2",
+        "label": "prompt_injection_llm_keys_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A2 activate prompt_injection + llm_api_keys",
+        "next_phase": "A3 activate rag_data_leakage + output_filtering",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -515,7 +804,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A1",
+                "pack_phase": "A2",
             },
         }
 
@@ -626,7 +915,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A1",
+            "pack_phase": "A2",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [

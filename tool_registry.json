@@ -395,7 +395,7 @@
     },
     {
       "tool_id": "scan_ai_security_pack",
-      "version": "0.1.0-a1",
+      "version": "0.2.0-a2",
       "module_file": "ai_ai_security_pack.py",
       "entry_point": "run",
       "sentinel": "ai",
@@ -413,7 +413,7 @@
         "agentic",
         "owasp-llm",
         "enterprise",
-        "a1-skeleton"
+        "a2-prompt-keys"
       ],
       "params": {
         "target": "path, label, or fixture JSON",
@@ -433,16 +433,19 @@
         "model_governance",
         "inference_hardening"
       ],
-      "pack_phase": "A1",
+      "pack_phase": "A2",
       "depends_on": [],
-      "active_engines": [],
-      "description": "Enterprise AI Security Engineer multi-engine pack — A1 skeleton: 10 engines registered as stub (0 findings). Next: A2 activate prompt_injection + llm_api_keys.",
+      "active_engines": [
+        "prompt_injection",
+        "llm_api_keys"
+      ],
+      "description": "Enterprise AI Security Engineer multi-engine pack — A2 Prompt Injection + LLM API Keys active; 8 engines remain stub until A3+.",
       "engines_status": {
-        "prompt_injection": "stub",
+        "prompt_injection": "active",
         "model_supply_chain": "stub",
         "rag_data_leakage": "stub",
         "agent_tool_abuse": "stub",
-        "llm_api_keys": "stub",
+        "llm_api_keys": "active",
         "output_filtering": "stub",
         "training_poison": "stub",
         "mcp_permissions": "stub",

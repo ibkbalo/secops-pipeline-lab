@@ -1,7 +1,7 @@
 {
   "_ai_security_fixture": true,
   "_profile": "vulnerable",
-  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — vulnerable profile. Sections consumed by engines as they go active (A2+). A1 skeleton loads and registers all engines as stubs (0 findings by design).",
+  "_description": "Enterprise AI Security Engineer multi-engine OFFLINE fixture — vulnerable profile. A2 consumes prompt_injection + llm_api_keys; remaining sections activate A3+.",
   "_schema_version": "1.0.0",
   "target": {
     "url": "https://llm-app-vulnerable.example.invalid",
