@@ -66,7 +66,7 @@ Sentinel Stacks ships **multi-engine role packs** — each one mimics a real sec
 | **Security Engineer** | `ai_security_engineer_pack.py` | ✅ Hands + Remediation (P1–P7) | 53 | [Beginner report (MD)](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) · [PDF download](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.pdf) |
 | DevSecOps | `ai_devsecops_pack.py` | ✅ Hands complete (D1–D6) | 62 | [Report (MD)](docs/DEVSECOPS_PACK_D1_D6_REPORT.md) · [PDF](docs/DEVSECOPS_PACK_D1_D6_REPORT.pdf) |
 | Cloud Security Engineer | `ai_cloud_pack.py` | ✅ Hands complete (C1) | 170 | — |
-| **AI Security Engineer** | `ai_ai_security_pack.py` | 🟡 A5 in progress (8/10 active) | 34 | — |
+| **AI Security Engineer** | `ai_ai_security_pack.py` | ✅ Hands complete (A1–A6) | 43 | — |
 
 ### Security Engineer — quick start
 
@@ -85,9 +85,9 @@ python ai_remediation_engine.py .tmp_se_vuln.json
 
 **New to security tooling?** Read the [beginner-friendly P1–P7 build report](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) — it explains what we built, why, and how to verify everything step by step.
 
-### AI Security Engineer — quick start (A5)
+### AI Security Engineer — quick start (A6 — hands complete)
 
-Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). A5 adds **model supply chain + training poison** (34 findings on vulnerable mock).
+Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). **All 10 engines active** — 43 findings on vulnerable mock, 0 on clean.
 
 ```powershell
 python ai_ai_security_pack.py mock
@@ -95,18 +95,18 @@ python ai_ai_security_pack.py mock
 
 | Engine | Code | Status |
 |--------|------|--------|
-| Prompt injection | PI | ✅ A2 active |
-| LLM API keys | KEY | ✅ A2 active |
-| RAG data leakage | RAG | ✅ A3 active |
-| Output filtering | OUT | ✅ A3 active |
-| Agent tool abuse | AGT | ✅ A4 active |
-| MCP permissions | MCP | ✅ A4 active |
-| Model supply chain | MSC | ✅ A5 active |
-| Training poison | POI | ✅ A5 active |
-| Model governance | GOV | A6 |
-| Inference hardening | INF | A6 |
+| Prompt injection | PI | ✅ A2 |
+| LLM API keys | KEY | ✅ A2 |
+| RAG data leakage | RAG | ✅ A3 |
+| Output filtering | OUT | ✅ A3 |
+| Agent tool abuse | AGT | ✅ A4 |
+| MCP permissions | MCP | ✅ A4 |
+| Model supply chain | MSC | ✅ A5 |
+| Training poison | POI | ✅ A5 |
+| Model governance | GOV | ✅ A6 |
+| Inference hardening | INF | ✅ A6 |
 
-**Roadmap:** SE/DevSecOps/Cloud Hands ✅ → **AI Security hands (A5)** → Brain → Face.
+**Roadmap:** All four role Hands ✅ → **A7 AISEC FIX_MAP** (next) → Brain → Face.
 
 ---
 

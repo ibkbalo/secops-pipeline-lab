@@ -395,7 +395,7 @@
     },
     {
       "tool_id": "scan_ai_security_pack",
-      "version": "0.5.0-a5",
+      "version": "0.6.0-a6",
       "module_file": "ai_ai_security_pack.py",
       "entry_point": "run",
       "sentinel": "ai",
@@ -413,7 +413,7 @@
         "agentic",
         "owasp-llm",
         "enterprise",
-        "a5-supply-poison"
+        "a6-hands-complete"
       ],
       "params": {
         "target": "path, label, or fixture JSON",
@@ -433,7 +433,7 @@
         "model_governance",
         "inference_hardening"
       ],
-      "pack_phase": "A5",
+      "pack_phase": "A6",
       "depends_on": [],
       "active_engines": [
         "prompt_injection",
@@ -443,9 +443,11 @@
         "agent_tool_abuse",
         "mcp_permissions",
         "model_supply_chain",
-        "training_poison"
+        "training_poison",
+        "model_governance",
+        "inference_hardening"
       ],
-      "description": "Enterprise AI Security Engineer multi-engine pack — A5 Model Supply Chain + Training Poison active (8/10); 2 engines remain stub until A6.",
+      "description": "Enterprise AI Security Engineer multi-engine pack — A6 COMPLETE: all 10 engines active. Next: AISEC FIX_MAP + role brain.",
       "engines_status": {
         "prompt_injection": "active",
         "model_supply_chain": "active",
@@ -455,10 +457,10 @@
         "output_filtering": "active",
         "training_poison": "active",
         "mcp_permissions": "active",
-        "model_governance": "stub",
-        "inference_hardening": "stub"
+        "model_governance": "active",
+        "inference_hardening": "active"
       },
-      "pack_hands_complete": false,
+      "pack_hands_complete": true,
       "id_scheme": "AISEC-{ENGINE_CODE}-{NNN}"
     }
   ]

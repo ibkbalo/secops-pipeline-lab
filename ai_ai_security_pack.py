@@ -11,11 +11,12 @@
 #            embedded fixture (tool allowlists, SSRF, connector sprawl).
 # Phase A5: Model Supply Chain (MSC) + Training Poison (POI) engines ACTIVE —
 #            embedded fixture (provenance, untrusted weights, fine-tune hygiene).
+# Phase A6: Model Governance (GOV) + Inference Hardening (INF) engines ACTIVE —
+#            pack hands COMPLETE (10/10).
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
 #
-# Planned activation (later phases):
-#   A6: model_governance + inference_hardening → pack hands complete
+# Planned next:
 #   A7: FIX_MAP AISEC-* in ai_remediation_engine.py
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.5.0-a5"
+VERSION = "0.6.0-a6"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -1232,13 +1233,267 @@ def _engine_mcp_permissions(ctx: PackContext) -> list[dict]:
 
 
 def _engine_model_governance(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A6. Logging/retention, eval gates, abuse monitoring."""
-    return []
+    """Model governance & abuse monitoring — embedded fixture."""
+    findings: list[dict] = []
+    gov = ctx.section("model_governance") if ctx.fixture else {}
+    if not gov:
+        return findings
+
+    if gov.get("abuse_monitoring") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_governance"),
+                "No abuse / misuse monitoring for LLM usage",
+                "high",
+                "There is no active monitoring for abusive prompts, jailbreak attempts, or anomalous "
+                "usage patterns. Incidents can persist without detection.",
+                resource={"type": "governance", "id": "abuse_monitoring", "engine": "model_governance"},
+                evidence={
+                    "abuse_monitoring": False,
+                    "source": "fixture.model_governance.abuse_monitoring",
+                },
+                remediation={
+                    "steps": [
+                        "Enable abuse/anomaly detection on prompts and tool-call rates.",
+                        "Alert SOC / AI ops on jailbreak clusters and sudden volume spikes.",
+                        "Retain enough telemetry to investigate incidents.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM04:2025", "NIST AI RMF MEASURE-2.7", "SOC 2 CC7.2"],
+                engine="model_governance",
+                backend="embedded",
+            )
+        )
+
+    retention = gov.get("prompt_response_logging_retention_days")
+    if retention is not None and int(retention) <= 0:
+        findings.append(
+            _finding(
+                ctx.next_id("model_governance"),
+                "Prompt/response logging retention not configured",
+                "medium",
+                f"Logging retention is set to {retention} days (disabled or zero). "
+                "Without retained logs, abuse investigation and compliance audits fail.",
+                resource={"type": "governance", "id": "log_retention", "engine": "model_governance"},
+                evidence={
+                    "prompt_response_logging_retention_days": retention,
+                    "source": "fixture.model_governance.prompt_response_logging_retention_days",
+                },
+                remediation={
+                    "steps": [
+                        "Enable prompt/response (or redacted) logging with a defined retention period.",
+                        "Align retention with legal/compliance requirements (e.g. 30–90 days).",
+                        "Protect logs as sensitive data; restrict access.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST AI RMF GOVERN-1.1", "NIST 800-53 AU-11", "SOC 2 CC7.1"],
+                engine="model_governance",
+                backend="embedded",
+            )
+        )
+
+    if gov.get("eval_gate_before_prod") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_governance"),
+                "No eval / safety gate before production deploy",
+                "high",
+                "Models can reach production without a required safety/quality evaluation gate. "
+                "Regressions in refusal behavior or hallucination rates may ship unnoticed.",
+                resource={"type": "ml_pipeline", "id": "eval_gate", "engine": "model_governance"},
+                evidence={
+                    "eval_gate_before_prod": False,
+                    "source": "fixture.model_governance.eval_gate_before_prod",
+                },
+                remediation={
+                    "steps": [
+                        "Require passing eval suites (safety, injection, quality) before promote-to-prod.",
+                        "Block deploys when eval scores fall below thresholds.",
+                        "Store eval reports with the model version in the registry.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["NIST AI RMF MEASURE-2.6", "OWASP LLM01:2025", "SOC 2 CC8.1"],
+                engine="model_governance",
+                backend="embedded",
+            )
+        )
+
+    if gov.get("acceptable_use_policy_enforced") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_governance"),
+                "Acceptable use policy not enforced on LLM product",
+                "medium",
+                "An acceptable use policy (AUP) is missing or not enforced at the product boundary. "
+                "Users are not constrained by documented prohibited uses.",
+                resource={"type": "governance", "id": "aup", "engine": "model_governance"},
+                evidence={
+                    "acceptable_use_policy_enforced": False,
+                    "source": "fixture.model_governance.acceptable_use_policy_enforced",
+                },
+                remediation={
+                    "steps": [
+                        "Publish and link an AUP for the LLM product.",
+                        "Enforce AUP checks in onboarding and at runtime for high-risk categories.",
+                        "Document exception / appeal process for blocked uses.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST AI RMF GOVERN-1.2", "SOC 2 CC1.2", "ISO 27001 A.5.1"],
+                engine="model_governance",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_inference_hardening(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A6. Auth, rate limits, cost/DoS on inference APIs."""
-    return []
+    """Inference API hardening — embedded fixture."""
+    findings: list[dict] = []
+    inf = ctx.section("inference_hardening") if ctx.fixture else {}
+    if not inf:
+        return findings
+
+    if inf.get("auth_required") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("inference_hardening"),
+                "Inference API does not require authentication",
+                "critical",
+                "The model inference endpoint accepts unauthenticated requests. "
+                "Anyone can invoke the model, burn quota, or abuse the service.",
+                resource={"type": "inference_api", "id": "auth", "engine": "inference_hardening"},
+                evidence={
+                    "auth_required": False,
+                    "source": "fixture.inference_hardening.auth_required",
+                },
+                remediation={
+                    "steps": [
+                        "Require API keys, OAuth, or mTLS for all inference routes.",
+                        "Reject anonymous traffic at the gateway.",
+                        "Rotate keys and audit unused credentials regularly.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM10:2025", "NIST 800-53 IA-2", "SOC 2 CC6.1"],
+                engine="inference_hardening",
+                backend="embedded",
+            )
+        )
+
+    if inf.get("public_unauthenticated_endpoint") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("inference_hardening"),
+                "Public unauthenticated inference endpoint exposed",
+                "critical",
+                "A publicly reachable inference endpoint allows anonymous access. "
+                "This is a direct abuse and data-exfiltration vector.",
+                resource={"type": "inference_api", "id": "public_endpoint", "engine": "inference_hardening"},
+                evidence={
+                    "public_unauthenticated_endpoint": True,
+                    "source": "fixture.inference_hardening.public_unauthenticated_endpoint",
+                },
+                remediation={
+                    "steps": [
+                        "Remove public anonymous routes or place them behind auth + WAF.",
+                        "Bind production inference to private networks / Zero Trust ingress.",
+                        "Monitor for unexpected internet-facing listeners.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM10:2025", "NIST 800-53 SC-7", "CIS Controls 4.4"],
+                engine="inference_hardening",
+                backend="embedded",
+            )
+        )
+
+    if inf.get("rate_limiting") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("inference_hardening"),
+                "No rate limiting on inference API",
+                "high",
+                "Inference requests are not rate-limited. Attackers can DoS the service or "
+                "inflate cost through uncontrolled token volume.",
+                resource={"type": "inference_api", "id": "rate_limit", "engine": "inference_hardening"},
+                evidence={
+                    "rate_limiting": False,
+                    "source": "fixture.inference_hardening.rate_limiting",
+                },
+                remediation={
+                    "steps": [
+                        "Apply per-identity and per-IP rate limits at the gateway.",
+                        "Set burst and sustained token budgets per tenant.",
+                        "Return 429 with backoff guidance when limits are hit.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM04:2025", "NIST 800-53 SC-5", "SOC 2 CC7.2"],
+                engine="inference_hardening",
+                backend="embedded",
+            )
+        )
+
+    if inf.get("cost_budget_alerts") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("inference_hardening"),
+                "No cost / budget alerts on inference spend",
+                "medium",
+                "There are no alerts when inference cost or token usage exceeds budgets. "
+                "Abuse or misconfiguration can run up spend unnoticed.",
+                resource={"type": "inference_api", "id": "cost_alerts", "engine": "inference_hardening"},
+                evidence={
+                    "cost_budget_alerts": False,
+                    "source": "fixture.inference_hardening.cost_budget_alerts",
+                },
+                remediation={
+                    "steps": [
+                        "Define per-tenant and org-level spend budgets.",
+                        "Alert finance/AI ops when thresholds are crossed.",
+                        "Optionally auto-throttle when budget is exhausted.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["OWASP LLM04:2025", "NIST AI RMF MEASURE-2.6"],
+                engine="inference_hardening",
+                backend="embedded",
+            )
+        )
+
+    if inf.get("tls_only") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("inference_hardening"),
+                "Inference traffic not restricted to TLS-only",
+                "high",
+                "The inference API allows non-TLS connections. Prompts, completions, and tokens "
+                "may traverse the network in cleartext.",
+                resource={"type": "inference_api", "id": "tls", "engine": "inference_hardening"},
+                evidence={
+                    "tls_only": False,
+                    "source": "fixture.inference_hardening.tls_only",
+                },
+                remediation={
+                    "steps": [
+                        "Enforce HTTPS/TLS 1.2+ (prefer 1.3) on all inference endpoints.",
+                        "Redirect or reject plain HTTP at the edge.",
+                        "Enable HSTS for public hostnames.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST 800-53 SC-8", "OWASP ASVS V9", "SOC 2 CC6.7"],
+                engine="inference_hardening",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 ENGINE_REGISTRY: list[dict[str, Any]] = [
@@ -1326,7 +1581,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "model_governance",
         "code": "GOV",
         "name": "Model Governance & Abuse Monitoring",
-        "status": "stub",
+        "status": "active",  # A6
         "phase": "A6",
         "preferred_backends": ["embedded"],
         "run": _engine_model_governance,
@@ -1336,7 +1591,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "inference_hardening",
         "code": "INF",
         "name": "Inference API Hardening",
-        "status": "stub",
+        "status": "active",  # A6
         "phase": "A6",
         "preferred_backends": ["embedded"],
         "run": _engine_inference_hardening,
@@ -1439,14 +1694,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A5",
-        "label": "supply_chain_training_poison_active",
+        "phase": "A6",
+        "label": "pack_hands_complete",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A6 activate model_governance + inference_hardening (hands complete)",
+        "next_phase": "A7 FIX_MAP AISEC-* in remediation engine (on request)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -1503,7 +1758,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A5",
+                "pack_phase": "A6",
             },
         }
 
@@ -1614,7 +1869,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A5",
+            "pack_phase": "A6",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
