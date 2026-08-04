@@ -9,11 +9,12 @@
 #            embedded fixture (tenant isolation, PII/index, response guards).
 # Phase A4: Agent Tool Abuse (AGT) + MCP Permissions (MCP) engines ACTIVE —
 #            embedded fixture (tool allowlists, SSRF, connector sprawl).
+# Phase A5: Model Supply Chain (MSC) + Training Poison (POI) engines ACTIVE —
+#            embedded fixture (provenance, untrusted weights, fine-tune hygiene).
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
 #
 # Planned activation (later phases):
-#   A5: model_supply_chain + training_poison
 #   A6: model_governance + inference_hardening → pack hands complete
 #   A7: FIX_MAP AISEC-* in ai_remediation_engine.py
 
@@ -29,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.4.0-a4"
+VERSION = "0.5.0-a5"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -378,8 +379,121 @@ def _engine_prompt_injection(ctx: PackContext) -> list[dict]:
 
 
 def _engine_model_supply_chain(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A5. Model provenance, weights, insecure plugins."""
-    return []
+    """Model supply chain & provenance — embedded fixture."""
+    findings: list[dict] = []
+    msc = ctx.section("model_supply_chain") if ctx.fixture else {}
+    if not msc:
+        return findings
+
+    if msc.get("model_provenance_attested") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_supply_chain"),
+                "Model provenance not attested",
+                "high",
+                "Deployed model artifacts lack cryptographic provenance / attestation. "
+                "Teams cannot verify which weights and publishers were approved for production.",
+                resource={"type": "model_artifact", "id": "provenance", "engine": "model_supply_chain"},
+                evidence={
+                    "model_provenance_attested": False,
+                    "source": "fixture.model_supply_chain.model_provenance_attested",
+                },
+                remediation={
+                    "steps": [
+                        "Require signed model cards / attestations for every production promotion.",
+                        "Record model hash, publisher, license, and approval ticket in a registry.",
+                        "Block deploys when provenance metadata is missing.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM03:2025", "NIST AI RMF MAP-2.3", "NIST 800-53 SA-12"],
+                engine="model_supply_chain",
+                backend="embedded",
+            )
+        )
+
+    if msc.get("weights_from_untrusted_hub") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("model_supply_chain"),
+                "Model weights pulled from untrusted hub",
+                "critical",
+                "Weights are sourced from an untrusted or unverified model hub. "
+                "Tampered checkpoints can embed backdoors or malicious code loaders.",
+                resource={"type": "model_artifact", "id": "weights", "engine": "model_supply_chain"},
+                evidence={
+                    "weights_from_untrusted_hub": True,
+                    "source": "fixture.model_supply_chain.weights_from_untrusted_hub",
+                },
+                remediation={
+                    "steps": [
+                        "Pin models to an internal mirror with hash verification.",
+                        "Allowlist approved publishers; ban anonymous / unknown hubs in CI.",
+                        "Scan downloaded artifacts (pickle/safetensors policy) before load.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM03:2025", "NIST 800-53 SA-12", "CIS Software Supply Chain 3.1"],
+                engine="model_supply_chain",
+                backend="embedded",
+            )
+        )
+
+    if msc.get("plugin_signing_required") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_supply_chain"),
+                "Model plugin / extension signing not required",
+                "high",
+                "Plugins or model extensions can load without signature verification. "
+                "A malicious plugin can execute code or alter inference behavior.",
+                resource={"type": "model_plugin", "id": "signing", "engine": "model_supply_chain"},
+                evidence={
+                    "plugin_signing_required": False,
+                    "source": "fixture.model_supply_chain.plugin_signing_required",
+                },
+                remediation={
+                    "steps": [
+                        "Require signed plugins and verify signatures at load time.",
+                        "Maintain an allowlist of approved plugin publishers.",
+                        "Disable unsigned plugin load in production runtimes.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM03:2025", "OWASP LLM08:2025", "NIST 800-53 CM-7"],
+                engine="model_supply_chain",
+                backend="embedded",
+            )
+        )
+
+    if msc.get("sbom_for_model_artifacts") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("model_supply_chain"),
+                "No SBOM for model / ML artifacts",
+                "medium",
+                "There is no software bill of materials covering model weights, tokenizers, "
+                "and runtime dependencies. Incident response cannot quickly inventory blast radius.",
+                resource={"type": "model_artifact", "id": "sbom", "engine": "model_supply_chain"},
+                evidence={
+                    "sbom_for_model_artifacts": False,
+                    "source": "fixture.model_supply_chain.sbom_for_model_artifacts",
+                },
+                remediation={
+                    "steps": [
+                        "Generate SBOMs for model packages and serving images on every release.",
+                        "Store SBOMs alongside the model registry entry.",
+                        "Gate production promotion on SBOM presence.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM03:2025", "NIST 800-53 CM-8", "Executive Order 14028 SBOM"],
+                engine="model_supply_chain",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 def _engine_rag_data_leakage(ctx: PackContext) -> list[dict]:
@@ -887,8 +1001,121 @@ def _engine_output_filtering(ctx: PackContext) -> list[dict]:
 
 
 def _engine_training_poison(ctx: PackContext) -> list[dict]:
-    """A1 stub — activate in A5. Poisoning / untrusted fine-tune data signals."""
-    return []
+    """Training / fine-tune data poisoning signals — embedded fixture."""
+    findings: list[dict] = []
+    poi = ctx.section("training_poison") if ctx.fixture else {}
+    if not poi:
+        return findings
+
+    if poi.get("untrusted_fine_tune_dataset") is True:
+        findings.append(
+            _finding(
+                ctx.next_id("training_poison"),
+                "Fine-tune dataset from untrusted source",
+                "critical",
+                "Fine-tuning uses data from an untrusted or unverified source. "
+                "Poisoned samples can implant triggers, bias, or policy bypasses into the model.",
+                resource={"type": "dataset", "id": "fine_tune", "engine": "training_poison"},
+                evidence={
+                    "untrusted_fine_tune_dataset": True,
+                    "source": "fixture.training_poison.untrusted_fine_tune_dataset",
+                },
+                remediation={
+                    "steps": [
+                        "Source fine-tune data only from approved, versioned corpora.",
+                        "Quarantine external contributions until reviewed.",
+                        "Track dataset hash and lineage in the model registry.",
+                    ],
+                    "effort": "high",
+                },
+                compliance=["OWASP LLM03:2025", "NIST AI RMF MAP-2.3", "NIST 800-53 SI-7"],
+                engine="training_poison",
+                backend="embedded",
+            )
+        )
+
+    if poi.get("dataset_provenance_review") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("training_poison"),
+                "No dataset provenance review before training",
+                "high",
+                "Datasets are not reviewed for provenance, license, or contamination before training. "
+                "Unknown origin data increases poisoning and compliance risk.",
+                resource={"type": "dataset", "id": "provenance_review", "engine": "training_poison"},
+                evidence={
+                    "dataset_provenance_review": False,
+                    "source": "fixture.training_poison.dataset_provenance_review",
+                },
+                remediation={
+                    "steps": [
+                        "Require a provenance checklist (source, license, PII, owner) before training jobs.",
+                        "Block training pipelines when review status is missing.",
+                        "Retain review records with the resulting model version.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM03:2025", "NIST AI RMF GOVERN-1.1", "NIST 800-53 SA-12"],
+                engine="training_poison",
+                backend="embedded",
+            )
+        )
+
+    if poi.get("poison_sample_detection") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("training_poison"),
+                "Poison / anomaly sample detection disabled",
+                "high",
+                "No automated detection for anomalous or adversarial samples in training data. "
+                "Trigger phrases and label flips can enter the corpus undetected.",
+                resource={"type": "dataset", "id": "poison_detection", "engine": "training_poison"},
+                evidence={
+                    "poison_sample_detection": False,
+                    "source": "fixture.training_poison.poison_sample_detection",
+                },
+                remediation={
+                    "steps": [
+                        "Run dedup, outlier, and known-trigger scans on datasets pre-train.",
+                        "Sample and manually review high-risk batches.",
+                        "Fail the training job when detection thresholds are exceeded.",
+                    ],
+                    "effort": "medium",
+                },
+                compliance=["OWASP LLM03:2025", "NIST AI RMF MEASURE-2.6", "NIST 800-53 SI-3"],
+                engine="training_poison",
+                backend="embedded",
+            )
+        )
+
+    if poi.get("human_review_gate") is False:
+        findings.append(
+            _finding(
+                ctx.next_id("training_poison"),
+                "No human review gate before fine-tune / train",
+                "medium",
+                "Training jobs can start without a human approval gate. "
+                "Unreviewed datasets and configs can reach production models.",
+                resource={"type": "ml_pipeline", "id": "human_review", "engine": "training_poison"},
+                evidence={
+                    "human_review_gate": False,
+                    "source": "fixture.training_poison.human_review_gate",
+                },
+                remediation={
+                    "steps": [
+                        "Require dual control / ticket approval before fine-tune jobs.",
+                        "Bind approval to dataset hash and training config.",
+                        "Audit who approved each production model lineage.",
+                    ],
+                    "effort": "low",
+                },
+                compliance=["NIST AI RMF GOVERN-1.2", "NIST 800-53 CM-3", "SOC 2 CC8.1"],
+                engine="training_poison",
+                backend="embedded",
+            )
+        )
+
+    return findings
 
 
 _DANGEROUS_MCP_SCOPES = {
@@ -1029,7 +1256,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "model_supply_chain",
         "code": "MSC",
         "name": "Model Supply Chain & Provenance",
-        "status": "stub",
+        "status": "active",  # A5
         "phase": "A5",
         "preferred_backends": ["trivy", "syft", "embedded"],
         "run": _engine_model_supply_chain,
@@ -1079,7 +1306,7 @@ ENGINE_REGISTRY: list[dict[str, Any]] = [
         "key": "training_poison",
         "code": "POI",
         "name": "Training / Fine-Tune Data Poisoning Signals",
-        "status": "stub",
+        "status": "active",  # A5
         "phase": "A5",
         "preferred_backends": ["embedded"],
         "run": _engine_training_poison,
@@ -1212,14 +1439,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A4",
-        "label": "agent_mcp_permissions_active",
+        "phase": "A5",
+        "label": "supply_chain_training_poison_active",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A5 activate model_supply_chain + training_poison",
+        "next_phase": "A6 activate model_governance + inference_hardening (hands complete)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -1276,7 +1503,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A4",
+                "pack_phase": "A5",
             },
         }
 
@@ -1387,7 +1614,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A4",
+            "pack_phase": "A5",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [

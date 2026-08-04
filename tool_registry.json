@@ -395,7 +395,7 @@
     },
     {
       "tool_id": "scan_ai_security_pack",
-      "version": "0.4.0-a4",
+      "version": "0.5.0-a5",
       "module_file": "ai_ai_security_pack.py",
       "entry_point": "run",
       "sentinel": "ai",
@@ -413,7 +413,7 @@
         "agentic",
         "owasp-llm",
         "enterprise",
-        "a4-agent-mcp"
+        "a5-supply-poison"
       ],
       "params": {
         "target": "path, label, or fixture JSON",
@@ -433,7 +433,7 @@
         "model_governance",
         "inference_hardening"
       ],
-      "pack_phase": "A4",
+      "pack_phase": "A5",
       "depends_on": [],
       "active_engines": [
         "prompt_injection",
@@ -441,17 +441,19 @@
         "rag_data_leakage",
         "output_filtering",
         "agent_tool_abuse",
-        "mcp_permissions"
+        "mcp_permissions",
+        "model_supply_chain",
+        "training_poison"
       ],
-      "description": "Enterprise AI Security Engineer multi-engine pack — A4 Agent Tools + MCP active (6/10); 4 engines remain stub until A5+.",
+      "description": "Enterprise AI Security Engineer multi-engine pack — A5 Model Supply Chain + Training Poison active (8/10); 2 engines remain stub until A6.",
       "engines_status": {
         "prompt_injection": "active",
-        "model_supply_chain": "stub",
+        "model_supply_chain": "active",
         "rag_data_leakage": "active",
         "agent_tool_abuse": "active",
         "llm_api_keys": "active",
         "output_filtering": "active",
-        "training_poison": "stub",
+        "training_poison": "active",
         "mcp_permissions": "active",
         "model_governance": "stub",
         "inference_hardening": "stub"
