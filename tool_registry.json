@@ -1,6 +1,6 @@
 {
   "registry_version": "1.0.0",
-  "updated_at": "2026-08-03T12:00:00Z",
+  "updated_at": "2026-08-05T12:00:00Z",
   "sentinel": "sentinel_stacks",
   "description": "Sentinel Stacks product module registry. Each entry is importable as run(params) and emits TOOL_STANDARDS.md v1.0 JSON.",
   "modules": [
@@ -463,6 +463,54 @@
       },
       "pack_hands_complete": true,
       "id_scheme": "AISEC-{ENGINE_CODE}-{NNN}"
+    },
+    {
+      "tool_id": "orchestrate_role_brain",
+      "version": "0.3.0-b3",
+      "module_file": "ai_brain_agent.py",
+      "entry_point": "run",
+      "sentinel": "command",
+      "domain": "command-center",
+      "subdomain": "brain/role-orchestration",
+      "tier": 2,
+      "role": "manager-orchestrator",
+      "tags": [
+        "brain",
+        "orchestration",
+        "multi-role",
+        "approval-gate",
+        "autonomous-workforce",
+        "customer-local",
+        "watch-loop",
+        "llm-reasoning",
+        "b3"
+      ],
+      "params": {
+        "action": "cycle|watch|pending|brief|reason|approve|reject|status|show|audit",
+        "roles": "security-engineer,devsecops,cloud,ai-security",
+        "mock": true,
+        "target": "optional live target",
+        "workspace": "brain_workspace",
+        "job_id": "optional for approve/reject/show/brief",
+        "remediate": true,
+        "dedupe": true,
+        "llm": true,
+        "llm_provider": "openai|anthropic|offline",
+        "interval_seconds": 300,
+        "max_cycles": "optional stop after N watch cycles"
+      },
+      "description": "Shared Role Brain B3 — watch loop + OpenAI/Anthropic/offline LLM briefs over all four Hands packs. Manager approval required; never auto-applies. Next: Face GUI.",
+      "brain_phase": "B3",
+      "llm_module": "ai_brain_llm.py",
+      "roles": [
+        "security-engineer",
+        "devsecops",
+        "cloud",
+        "ai-security"
+      ],
+      "requires_approval": true,
+      "auto_apply": false,
+      "data_plane": "customer_local"
     }
   ]
 }

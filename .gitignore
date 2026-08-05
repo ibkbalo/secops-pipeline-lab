@@ -1,5 +1,6 @@
 
 hardening_kits/
+brain_workspace/
 test-results-aws-vulnerable.json
 test-results-azure-vulnerable.json
 

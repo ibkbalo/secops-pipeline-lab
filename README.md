@@ -111,7 +111,46 @@ python ai_remediation_engine.py .tmp_aisec_vuln.json
 
 **New to AI security tooling?** Read the [beginner-friendly A1–A7 build report](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.md) — it explains what we built, why, and how to verify everything step by step. ([PDF](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.pdf))
 
-**Roadmap:** All four role Hands + Remediation ✅ → **Brain** (next) → Face.
+**Roadmap:** Hands ✅ → **Brain B3 (LLM)** ✅ → **Face** (next).
+
+### Brain B3 — always-on multi-role AI agent (LLM + manager approval)
+
+One Brain orchestrates all four Hands packs, then runs an **LLM reasoning node** (OpenAI / Anthropic, or offline fallback). On the floor it runs as a **watch loop**. It scans, drafts dry-run kits, briefs the manager, and queues jobs for approve/reject. Nothing is auto-applied. State stays in local `brain_workspace/`.
+
+**One-shot lab cycle + brief:**
+
+```powershell
+python ai_brain_agent.py cycle --mock --llm
+python ai_brain_agent.py brief
+python ai_brain_agent.py pending
+python ai_brain_agent.py approve JOB_ID_HERE
+python ai_brain_agent.py status
+```
+
+**Optional live LLM (your key stays local):**
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."          # or ANTHROPIC_API_KEY
+python ai_brain_agent.py brief --provider openai
+```
+
+**Production-style always-on (Ctrl+C to stop):**
+
+```powershell
+python ai_brain_agent.py watch --mock --interval 300 --llm
+```
+
+| Piece | Detail |
+|-------|--------|
+| Modules | `ai_brain_agent.py` + `ai_brain_llm.py` |
+| Version | `0.3.0-b3` |
+| Roles | security-engineer, devsecops, cloud, ai-security |
+| LLM | OpenAI / Anthropic / offline heuristic |
+| Watch | `watch` / `serve` — cycle → sleep → repeat |
+| Dedupe | same open findings do not spam new jobs |
+| Audit | `python ai_brain_agent.py audit` |
+| Approval | required; auto-apply forbidden |
+| Data plane | local workspace only |
 
 ---
 
