@@ -117,6 +117,8 @@ python ai_remediation_engine.py .tmp_aisec_vuln.json
 
 One Brain orchestrates all four Hands packs, then runs an **LLM reasoning node** (OpenAI / Anthropic, or offline fallback). On the floor it runs as a **watch loop**. It scans, drafts dry-run kits, briefs the manager, and queues jobs for approve/reject. Nothing is auto-applied. State stays in local `brain_workspace/`.
 
+**New to the Brain?** Read the [beginner-friendly B1–B3 build report](docs/BRAIN_B1_B3_REPORT.md) — architecture, phases, commands, and how to read outputs for novice / CTO / CISO. ([PDF](docs/BRAIN_B1_B3_REPORT.pdf))
+
 **One-shot lab cycle + brief:**
 
 ```powershell
@@ -151,6 +153,7 @@ python ai_brain_agent.py watch --mock --interval 300 --llm
 | Audit | `python ai_brain_agent.py audit` |
 | Approval | required; auto-apply forbidden |
 | Data plane | local workspace only |
+| Report | [MD](docs/BRAIN_B1_B3_REPORT.md) · [PDF](docs/BRAIN_B1_B3_REPORT.pdf) |
 
 ---
 
