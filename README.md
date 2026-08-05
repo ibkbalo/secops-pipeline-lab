@@ -66,7 +66,7 @@ Sentinel Stacks ships **multi-engine role packs** — each one mimics a real sec
 | **Security Engineer** | `ai_security_engineer_pack.py` | ✅ Hands + Remediation (P1–P7) | 53 | [Beginner report (MD)](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) · [PDF download](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.pdf) |
 | DevSecOps | `ai_devsecops_pack.py` | ✅ Hands complete (D1–D6) | 62 | [Report (MD)](docs/DEVSECOPS_PACK_D1_D6_REPORT.md) · [PDF](docs/DEVSECOPS_PACK_D1_D6_REPORT.pdf) |
 | Cloud Security Engineer | `ai_cloud_pack.py` | ✅ Hands complete (C1) | 170 | — |
-| **AI Security Engineer** | `ai_ai_security_pack.py` | ✅ Hands complete (A1–A6) | 43 | — |
+| **AI Security Engineer** | `ai_ai_security_pack.py` | ✅ Hands + Remediation (A1–A7) | 43 | — |
 
 ### Security Engineer — quick start
 
@@ -85,12 +85,14 @@ python ai_remediation_engine.py .tmp_se_vuln.json
 
 **New to security tooling?** Read the [beginner-friendly P1–P7 build report](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) — it explains what we built, why, and how to verify everything step by step.
 
-### AI Security Engineer — quick start (A6 — hands complete)
+### AI Security Engineer — quick start (A7 — hands + remediation)
 
-Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). **All 10 engines active** — 43 findings on vulnerable mock, 0 on clean.
+Enterprise **AI / LLM security** multi-engine pack (same spine as DevSecOps & Security Engineer). **All 10 engines active** — 43 findings on vulnerable mock, all mapped in remediation `1.5.0`.
 
 ```powershell
 python ai_ai_security_pack.py mock
+python ai_ai_security_pack.py mock | Out-File -Encoding utf8 .tmp_aisec_vuln.json
+python ai_remediation_engine.py .tmp_aisec_vuln.json
 ```
 
 | Engine | Code | Status |
@@ -105,8 +107,9 @@ python ai_ai_security_pack.py mock
 | Training poison | POI | ✅ A5 |
 | Model governance | GOV | ✅ A6 |
 | Inference hardening | INF | ✅ A6 |
+| FIX_MAP `AISEC-*` | — | ✅ A7 (43 mapped) |
 
-**Roadmap:** All four role Hands ✅ → **A7 AISEC FIX_MAP** (next) → Brain → Face.
+**Roadmap:** All four role Hands + Remediation ✅ → **Brain** (next) → Face.
 
 ---
 

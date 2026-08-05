@@ -395,7 +395,7 @@
     },
     {
       "tool_id": "scan_ai_security_pack",
-      "version": "0.6.0-a6",
+      "version": "0.7.0-a7",
       "module_file": "ai_ai_security_pack.py",
       "entry_point": "run",
       "sentinel": "ai",
@@ -413,7 +413,8 @@
         "agentic",
         "owasp-llm",
         "enterprise",
-        "a6-hands-complete"
+        "a6-hands-complete",
+        "a7-remediation-mapped"
       ],
       "params": {
         "target": "path, label, or fixture JSON",
@@ -433,7 +434,7 @@
         "model_governance",
         "inference_hardening"
       ],
-      "pack_phase": "A6",
+      "pack_phase": "A7",
       "depends_on": [],
       "active_engines": [
         "prompt_injection",
@@ -447,7 +448,7 @@
         "model_governance",
         "inference_hardening"
       ],
-      "description": "Enterprise AI Security Engineer multi-engine pack — A6 COMPLETE: all 10 engines active. Next: AISEC FIX_MAP + role brain.",
+      "description": "Enterprise AI Security Engineer multi-engine pack — A7 COMPLETE: 10/10 engines + FIX_MAP for all 43 AISEC-* IDs. Next: role brain.",
       "engines_status": {
         "prompt_injection": "active",
         "model_supply_chain": "active",

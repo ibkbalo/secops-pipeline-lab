@@ -13,11 +13,10 @@
 #            embedded fixture (provenance, untrusted weights, fine-tune hygiene).
 # Phase A6: Model Governance (GOV) + Inference Hardening (INF) engines ACTIVE —
 #            pack hands COMPLETE (10/10).
+# Phase A7: FIX_MAP AISEC-* in ai_remediation_engine.py (1.5.0) —
+#            hands + remediation bar (43 mapped / 0 unmapped).
 # Enterprise bar: full AI / LLM security multi-engine pack —
 #                 not a single-scanner toy (prompt-injection-only demo).
-#
-# Planned next:
-#   A7: FIX_MAP AISEC-* in ai_remediation_engine.py
 
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_ai_security_pack"
-VERSION = "0.6.0-a6"
+VERSION = "0.7.0-a7"
 DOMAIN = "aisec"
 SUBDOMAIN = "ai-security/pack"
 SENTINEL = "ai"
@@ -1694,14 +1693,14 @@ def _pack_readiness(engine_results: list[dict]) -> dict[str, Any]:
     stub = sum(1 for e in engine_results if e.get("status") == "stub")
     pct = round((active / total) * 100) if total else 0
     return {
-        "phase": "A6",
-        "label": "pack_hands_complete",
+        "phase": "A7",
+        "label": "pack_hands_remediation_mapped",
         "engines_total": total,
         "engines_active": active,
         "engines_stub": stub,
         "complete_pct": pct,
         "enterprise_bar": "full AI Security Engineer multi-engine pack — not single-scanner ceiling",
-        "next_phase": "A7 FIX_MAP AISEC-* in remediation engine (on request)",
+        "next_phase": "AI Security Engineer role brain (on request)",
         "active_engines": sorted(e["key"] for e in engine_results if e.get("status") == "active"),
         "pack_hands_complete": active == total and stub == 0,
     }
@@ -1758,7 +1757,7 @@ def run(params: dict) -> dict:
                 "tier": TIER,
                 "tags": TAGS,
                 "llm_summary": f"AI Security pack failed: {err}",
-                "pack_phase": "A6",
+                "pack_phase": "A7",
             },
         }
 
@@ -1869,7 +1868,7 @@ def run(params: dict) -> dict:
             "tier": TIER,
             "tags": TAGS,
             "llm_summary": llm,
-            "pack_phase": "A6",
+            "pack_phase": "A7",
             "pack_readiness": readiness,
             "pack_hands_complete": readiness.get("pack_hands_complete", False),
             "engine_registry": [
