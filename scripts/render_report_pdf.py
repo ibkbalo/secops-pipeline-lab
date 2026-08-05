@@ -11,10 +11,14 @@ from fpdf import FPDF
 
 
 class ReportPDF(FPDF):
+    def __init__(self, header_title: str = "Sentinel Stacks | Build Report") -> None:
+        super().__init__()
+        self._header_title = header_title
+
     def header(self) -> None:
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(100, 100, 100)
-        self.cell(0, 8, "Sentinel Stacks | Security Engineer Hands P1-P7", align="C")
+        self.cell(0, 8, self._header_title, align="C")
         self.ln(10)
 
     def footer(self) -> None:
@@ -56,9 +60,13 @@ def _ascii_safe(text: str) -> str:
     return text.encode("ascii", "replace").decode("ascii")
 
 
-def render_md_to_pdf(md_path: Path, pdf_path: Path) -> None:
+def render_md_to_pdf(
+    md_path: Path,
+    pdf_path: Path,
+    header_title: str = "Sentinel Stacks | Build Report",
+) -> None:
     lines = md_path.read_text(encoding="utf-8").splitlines()
-    pdf = ReportPDF()
+    pdf = ReportPDF(header_title=header_title)
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
@@ -189,12 +197,19 @@ def render_md_to_pdf(md_path: Path, pdf_path: Path) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        print("Usage: python scripts/render_report_pdf.py <input.md> <output.pdf>")
+    if len(sys.argv) not in (3, 4):
+        print(
+            "Usage: python scripts/render_report_pdf.py <input.md> <output.pdf> [header title]"
+        )
         sys.exit(1)
     md_path = Path(sys.argv[1])
     pdf_path = Path(sys.argv[2])
-    render_md_to_pdf(md_path, pdf_path)
+    header = (
+        sys.argv[3]
+        if len(sys.argv) == 4
+        else "Sentinel Stacks | Build Report"
+    )
+    render_md_to_pdf(md_path, pdf_path, header_title=header)
     print(f"Wrote {pdf_path}")
 
 

@@ -66,7 +66,7 @@ Sentinel Stacks ships **multi-engine role packs** — each one mimics a real sec
 | **Security Engineer** | `ai_security_engineer_pack.py` | ✅ Hands + Remediation (P1–P7) | 53 | [Beginner report (MD)](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.md) · [PDF download](docs/SECURITY_ENGINEER_PACK_P1_P7_REPORT.pdf) |
 | DevSecOps | `ai_devsecops_pack.py` | ✅ Hands complete (D1–D6) | 62 | [Report (MD)](docs/DEVSECOPS_PACK_D1_D6_REPORT.md) · [PDF](docs/DEVSECOPS_PACK_D1_D6_REPORT.pdf) |
 | Cloud Security Engineer | `ai_cloud_pack.py` | ✅ Hands complete (C1) | 170 | — |
-| **AI Security Engineer** | `ai_ai_security_pack.py` | ✅ Hands + Remediation (A1–A7) | 43 | — |
+| **AI Security Engineer** | `ai_ai_security_pack.py` | ✅ Hands + Remediation (A1–A7) | 43 | [Beginner report (MD)](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.md) · [PDF download](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.pdf) |
 
 ### Security Engineer — quick start
 
@@ -108,6 +108,8 @@ python ai_remediation_engine.py .tmp_aisec_vuln.json
 | Model governance | GOV | ✅ A6 |
 | Inference hardening | INF | ✅ A6 |
 | FIX_MAP `AISEC-*` | — | ✅ A7 (43 mapped) |
+
+**New to AI security tooling?** Read the [beginner-friendly A1–A7 build report](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.md) — it explains what we built, why, and how to verify everything step by step. ([PDF](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.pdf))
 
 **Roadmap:** All four role Hands + Remediation ✅ → **Brain** (next) → Face.
 
