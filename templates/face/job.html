@@ -1,0 +1,153 @@
+{% extends "face/base.html" %}
+{% block title %}Review · {{ job.title }} · Sentinel Stacks{% endblock %}
+{% block body %}
+{% set s = job.summary or {} %}
+{% set c = s.severity_counts or {} %}
+{% set review = review if review is defined else {} %}
+{% set explain = review.explain or {} %}
+{% set findings = review.findings or [] %}
+<main class="detail-wrap">
+  <a class="btn btn-ghost" href="{{ url_for('dashboard') }}" style="margin-bottom:16px;display:inline-flex;">Back to agents</a>
+
+  <article class="detail-card">
+    <div class="eyebrow">{{ job.role }} · {{ job.status }} · Brain explains → you decide</div>
+    <h1>{{ job.title }}</h1>
+    <div class="mono">{{ job.job_id }}</div>
+
+    <div class="job-stats" style="margin-top:16px;">
+      <span class="chip">{{ review.findings_count or 0 }} findings</span>
+      <span class="chip chip-crit">{{ c.critical or 0 }} critical</span>
+      <span class="chip chip-high">{{ c.high or 0 }} high</span>
+      {% if job.remediation_mapped is not none %}
+      <span class="chip chip-ok">{{ job.remediation_mapped }} mapped in kit</span>
+      {% endif %}
+    </div>
+
+    {# —— Brain instant explanation —— #}
+    <section class="brain-explain">
+      <div class="brain-explain-head">
+        <span class="chip chip-ok">BRAIN</span>
+        <span class="chip">{{ explain.provider or "offline" }} · {{ explain.model or "heuristic-v1" }}</span>
+        <span class="chip">{{ explain.confidence or "medium" }} confidence</span>
+        <span class="chip">recommend: {{ explain.recommendation or "investigate" }}</span>
+      </div>
+      <h2>What Brain found — and how to fix it</h2>
+      <p class="brain-headline">{{ explain.headline or "Loading explanation…" }}</p>
+      <p class="brain-why">{{ explain.why or "" }}</p>
+
+      {% if explain.issue_fixes %}
+      <div class="issue-fix-list">
+        {% for item in explain.issue_fixes %}
+        <article class="issue-fix-card sev-{{ item.severity or 'info' }}">
+          <div class="finding-top">
+            <span class="sev">{{ item.severity }}</span>
+            <span class="mono">{{ item.id }}</span>
+          </div>
+          <h4>Issue: {{ item.issue }}</h4>
+          <p class="finding-desc">{{ item.why }}</p>
+          <div class="fix-box">
+            <div class="engine-label">How to fix</div>
+            <p>{{ item.how_to_fix }}</p>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+
+    {# —— Kit download —— #}
+    <section class="brief-section kit-download-block" style="margin-top:20px;">
+      <h3>Hardening kit (download ZIP)</h3>
+      <p style="color:var(--muted);margin:8px 0 12px;font-size:0.92rem;">
+        Download → unzip → open <span class="mono">runbooks/</span> and <span class="mono">configs/</span> → work the fixes → then Approve or Reject here.
+      </p>
+      {% if review.kit_exists %}
+      <a class="btn btn-signal" href="{{ url_for('download_kit', job_id=job.job_id) }}">
+        Download kit ZIP — {{ review.kit_name }}
+      </a>
+      <p class="mono" style="margin-top:10px;color:#94a3b8;">Saved as: {{ review.kit_path }}</p>
+      {% else %}
+      <p class="mono" style="color:var(--red);">Kit file not found on disk: {{ review.kit_path or "none" }}</p>
+      {% endif %}
+
+      {% if review.kit_files %}
+      <p style="color:var(--muted);margin:14px 0 8px;font-size:0.9rem;">Inside the ZIP:</p>
+      <ul class="kit-files">
+        {% for f in review.kit_files %}
+        <li class="mono">{{ f }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+
+    {% if job.status == "pending_approval" %}
+    <div class="detail-actions">
+      <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve plan</button>
+      <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject plan</button>
+    </div>
+    <p class="mono" style="margin-top:-8px;">Approve = accept the plan. It does <strong>not</strong> auto-apply to production.</p>
+    {% else %}
+    <div class="detail-actions">
+      <span class="chip">Decision: {{ job.manager_decision or job.status }}</span>
+    </div>
+    {% endif %}
+
+    <div class="brief-section" style="margin-top:18px;">
+      <h3>Agent proposal</h3>
+      <div class="proposal">{{ job.proposal or "No proposal text." }}</div>
+    </div>
+
+    <div class="brief-section findings-block" style="margin-top:22px;">
+      <h3>Full findings list ({{ review.findings_count or 0 }})</h3>
+      <p style="color:var(--muted);margin:6px 0 12px;font-size:0.9rem;">
+        Every issue from this agent’s scan, with detailed fix steps.
+      </p>
+
+      {% if findings %}
+      <div class="finding-list">
+        {% for f in findings %}
+        <article class="finding-card sev-{{ f.severity or 'info' }}">
+          <div class="finding-top">
+            <span class="sev">{{ f.severity or "info" }}</span>
+            <span class="mono">{{ f.id }}</span>
+          </div>
+          <h4>{{ f.title }}</h4>
+          <p class="finding-desc">{{ f.description }}</p>
+          {% set steps = (f.remediation or {}).steps or [] %}
+          <div class="fix-box">
+            <div class="engine-label">Proposed solution steps</div>
+            {% if steps %}
+            <ol>
+              {% for step in steps %}
+              <li>{{ step }}</li>
+              {% endfor %}
+            </ol>
+            {% else %}
+            <p>See kit runbook/config for {{ f.id }} after you download the ZIP.</p>
+            {% endif %}
+            {% if (f.remediation or {}).effort %}
+            <div class="mono" style="margin-top:6px;">Effort: {{ f.remediation.effort }}</div>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty empty-sm">
+        <strong>No findings file loaded</strong>
+        Scan path: <span class="mono">{{ review.scan_path }}</span>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if job.status == "pending_approval" %}
+    <div class="detail-actions" style="margin-top:22px;">
+      <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve plan</button>
+      <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject plan</button>
+    </div>
+    {% endif %}
+  </article>
+
+  <p class="footer-note">FACE {{ face_version }} · BRAIN EXPLAINS · KIT DOWNLOAD · THEN APPROVE/REJECT</p>
+</main>
+{% endblock %}

@@ -1,0 +1,207 @@
+{% extends "face/base.html" %}
+{% block title %}Sentinel Stacks — AI Agent Console{% endblock %}
+{% block body %}
+<main class="app">
+  <div class="cmd-bar">
+    <div class="cmd-left">
+      <span class="live-dot" aria-hidden="true"></span>
+      <div class="cmd-title">
+        <strong>AI Agent Workforce Console</strong>
+        <span>Face {{ face_version }} · Brain {{ brain_version }} · {{ llm.selected }} · 4 AGENTS</span>
+      </div>
+      <span class="posture-pill {{ posture_class }}">Risk {{ posture }}</span>
+    </div>
+    <div class="top-actions">
+      <button class="btn btn-ghost" id="btn-brief" type="button">Refresh brief</button>
+      <button class="btn btn-primary" id="btn-cycle" type="button">Run AI cycle</button>
+      <a class="btn btn-signal" href="/">Reload</a>
+    </div>
+  </div>
+
+  <section class="howto" aria-label="How to use this console">
+    <div class="howto-title">Start here — what to click</div>
+    <ol>
+      <li><strong>Scroll down</strong> to the 4 AI agents (Security Engineer, DevSecOps, Cloud, AI Security).</li>
+      <li>Inside each agent, open a <strong>job</strong> → review the kit → click <strong>Approve</strong> or <strong>Reject</strong>.</li>
+      <li><strong>Findings</strong> numbers come from those agent scan jobs (lab mock = intentionally vulnerable demo data).</li>
+      <li><strong>Brain brief</strong> (right side) is the summary report — not where you approve.</li>
+    </ol>
+  </section>
+
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="eyebrow">Autonomous security agents · human manager approval</div>
+      <h1 class="brand">Sentinel <span>Stacks</span></h1>
+      <p class="tagline">
+        These are AI agents, not a SIEM. Each agent ran scanners (engines), found issues,
+        and queued fix kits for you.
+      </p>
+      <div class="product-tags">
+        <span class="ptag">AI AGENTS</span>
+        <span class="ptag">4 SPECIALISTS</span>
+        <span class="ptag">MANAGER APPROVES</span>
+      </div>
+    </div>
+    <section class="risk-board" aria-label="Findings from pending agent jobs">
+      <div class="risk-cell risk-crit"><div class="n">{{ sev_totals.critical }}</div><div class="l">Critical</div></div>
+      <div class="risk-cell risk-high"><div class="n">{{ sev_totals.high }}</div><div class="l">High</div></div>
+      <div class="risk-cell risk-med"><div class="n">{{ sev_totals.medium }}</div><div class="l">Medium</div></div>
+      <div class="risk-cell risk-low"><div class="n">{{ sev_totals.low }}</div><div class="l">Low</div></div>
+      <div class="risk-cell risk-total"><div class="n">{{ findings_total }}</div><div class="l">In open jobs</div></div>
+    </section>
+  </header>
+
+  <section class="kpi-strip">
+    <article class="kpi kpi-pending">
+      <div class="kpi-label">Jobs waiting for you</div>
+      <div class="kpi-value">{{ pending_n }}</div>
+      <div class="kpi-meta">approve / reject below</div>
+    </article>
+    <article class="kpi kpi-approved">
+      <div class="kpi-label">Approved</div>
+      <div class="kpi-value">{{ approved_n }}</div>
+      <div class="kpi-meta">plans accepted</div>
+    </article>
+    <article class="kpi kpi-rejected">
+      <div class="kpi-label">Rejected</div>
+      <div class="kpi-value">{{ rejected_n }}</div>
+      <div class="kpi-meta">blocked proposals</div>
+    </article>
+    <article class="kpi kpi-findings">
+      <div class="kpi-label">AI agents online</div>
+      <div class="kpi-value">{{ agents|length }}</div>
+      <div class="kpi-meta">SE · DSO · CLD · AIS</div>
+    </article>
+  </section>
+
+  <div class="grid grid-agents">
+    <section class="agent-inbox-stack">
+      <div class="fleet-head">
+        <div>
+          <h2>Your 4 AI Agents + their jobs</h2>
+          <p>This is the main work area. Approve / Reject buttons are on each job.</p>
+        </div>
+        <p class="panel-count">{{ pending_n }} jobs total</p>
+      </div>
+
+      {% if not agents %}
+      <div class="empty">
+        <strong>Agents failed to load</strong>
+        Stop Face (Ctrl+C), then run: python face_app.py
+      </div>
+      {% endif %}
+
+      {% for agent in agents %}
+      <section class="panel agent-panel" id="agent-{{ agent.key }}">
+        <div class="panel-head">
+          <div>
+            <div class="agent-tag-row" style="margin-bottom:6px;">
+              <span class="ptag">AI AGENT</span>
+              <span class="ptag ptag-soft">{{ agent.short }}</span>
+              <span class="agent-status {% if agent.status == 'WORKING' %}st-work{% else %}st-idle{% endif %}">{{ agent.status }}</span>
+            </div>
+            <h2>{{ agent.title }}</h2>
+            <p>{{ agent.focus }} · IDs {{ agent.id_prefix }}*</p>
+          </div>
+          <p class="panel-count">{{ agent.pending }} jobs · {{ agent.findings }} findings</p>
+        </div>
+
+        <div class="engine-wrap" style="padding:10px 16px 0;">
+          <div class="engine-label">This agent’s engines (scanners)</div>
+          <div class="engine-chips">
+            {% for eng in agent.engines %}
+            <span class="engine-chip">{{ eng }}</span>
+            {% endfor %}
+          </div>
+        </div>
+
+        {% if agent.jobs %}
+        <div class="job-list job-list-compact">
+          {% for job in agent.jobs %}
+          {% set s = job.summary or {} %}
+          {% set c = s.severity_counts or {} %}
+          <article class="job-card">
+            <div>
+              <div class="job-role">JOB waiting for manager decision</div>
+              <div class="job-title">{{ job.title }}</div>
+              <div class="job-id">{{ job.job_id }}</div>
+              <div class="job-stats">
+                <span class="chip">{{ s.total_findings or 0 }} findings</span>
+                <span class="chip chip-crit">{{ c.critical or 0 }} critical</span>
+                <span class="chip chip-high">{{ c.high or 0 }} high</span>
+                {% if job.remediation_mapped is not none %}
+                <span class="chip chip-ok">{{ job.remediation_mapped }} mapped in kit</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="job-actions">
+              <a class="btn" href="{{ url_for('job_detail', job_id=job.job_id) }}">Review findings</a>
+              <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve</button>
+              <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject</button>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty empty-sm">
+          <strong>No jobs from this agent yet</strong>
+          Click “Run AI cycle” (top right) to generate work, or wait for watch.
+        </div>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </section>
+
+    <aside class="side-stack">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Where did findings come from?</h2>
+            <p>Quick explainer</p>
+          </div>
+        </div>
+        <div class="panel-body explain">
+          <p><strong>Not a mystery feed.</strong> Each number above is the sum of findings inside the <em>pending jobs</em> from your 4 agents.</p>
+          <p>In lab mode those jobs were created by mock vulnerable scans (intentionally broken demo company).</p>
+          <p><strong>Report</strong> = Brain brief on the right (executive + CEO summary).</p>
+          <p><strong>See findings + fixes</strong> = click <em>Review findings</em> → Brain explains the issues, then <em>Download kit ZIP</em>.</p>
+        </div>
+      </section>
+
+      <section class="panel brief-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Brain brief (report)</h2>
+            <p>Read-only summary. Approve jobs on the left.</p>
+          </div>
+        </div>
+        {% if brief and brief.result %}
+        <div class="brief-meta">
+          <span class="chip">{{ brief.result.provider }} · {{ brief.result.model }}</span>
+          <span class="chip">{{ brief.result.confidence }} confidence</span>
+        </div>
+        <div class="brief-body">
+          <div class="brief-section">
+            <h3>Executive summary</h3>
+            <p>{{ brief.result.executive_summary }}</p>
+          </div>
+          <div class="brief-section">
+            <h3>CEO brief</h3>
+            <p>{{ brief.result.ceo_brief }}</p>
+          </div>
+        </div>
+        {% else %}
+        <div class="empty empty-sm">
+          <strong>No brief yet</strong>
+          Click “Refresh brief”.
+        </div>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
+
+  <p class="footer-note">
+    FACE {{ face_version }} · SCROLL TO AGENTS FOR APPROVE/REJECT · FINDINGS = SUM OF OPEN JOBS
+  </p>
+</main>
+{% endblock %}

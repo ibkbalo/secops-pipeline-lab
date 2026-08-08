@@ -111,7 +111,7 @@ python ai_remediation_engine.py .tmp_aisec_vuln.json
 
 **New to AI security tooling?** Read the [beginner-friendly A1–A7 build report](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.md) — it explains what we built, why, and how to verify everything step by step. ([PDF](docs/AI_SECURITY_ENGINEER_PACK_A1_A7_REPORT.pdf))
 
-**Roadmap:** Hands ✅ → **Brain B3 (LLM)** ✅ → **Face** (next).
+**Roadmap:** Hands ✅ → Brain B3 ✅ → **Face v0.1** ✅ → Auth/tenants/apply (next).
 
 ### Brain B3 — always-on multi-role AI agent (LLM + manager approval)
 
@@ -154,6 +154,25 @@ python ai_brain_agent.py watch --mock --interval 300 --llm
 | Approval | required; auto-apply forbidden |
 | Data plane | local workspace only |
 | Report | [MD](docs/BRAIN_B1_B3_REPORT.md) · [PDF](docs/BRAIN_B1_B3_REPORT.pdf) |
+
+### Face v0.1 — manager dashboard
+
+Beautiful local console over Brain. Review pending jobs, read briefs, open kits, approve/reject — no PowerShell required for daily manager flow.
+
+```powershell
+python face_app.py
+```
+
+Then open [http://127.0.0.1:5050](http://127.0.0.1:5050)
+
+| Piece | Detail |
+|-------|--------|
+| Module | `face_app.py` |
+| Version | `0.1.2-f1` (dark AI-agent console · 4 agent panels) |
+| Stack | Flask + custom Face UI |
+| Actions | inbox, job detail, approve, reject, refresh brief, run AI cycle |
+| Data plane | local `brain_workspace/` only |
+| Auto-apply | forbidden |
 
 ---
 
