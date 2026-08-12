@@ -15,6 +15,7 @@
     <div class="mono">{{ job.job_id }}</div>
 
     <div class="job-stats" style="margin-top:16px;">
+      <span class="chip {{ review.risk_class or 'risk-med' }}">Risk {{ review.risk_score if review.risk_score is not none else '—' }} · {{ review.risk_label or '' }}</span>
       <span class="chip">{{ review.findings_count or 0 }} findings</span>
       <span class="chip chip-crit">{{ c.critical or 0 }} critical</span>
       <span class="chip chip-high">{{ c.high or 0 }} high</span>
@@ -22,6 +23,36 @@
       <span class="chip chip-ok">{{ job.remediation_mapped }} mapped in kit</span>
       {% endif %}
     </div>
+
+    {# —— Compliance rollup for this job —— #}
+    {% set comp = review.compliance or {} %}
+    <section class="brief-section compliance-job" style="margin-top:18px;">
+      <h3>Compliance (this job)</h3>
+      <p style="color:var(--muted);margin:6px 0 12px;font-size:0.9rem;">
+        {{ comp.findings_with_compliance or 0 }} / {{ comp.findings_total or 0 }} findings tagged ·
+        frameworks: {{ (comp.frameworks_hit or [])|join(', ') or 'none' }}
+      </p>
+      <div class="compliance-grid compliance-grid-sm">
+        {% for fw in comp.frameworks or [] %}
+        {% if fw.finding_count %}
+        <article class="compliance-card">
+          <div class="compliance-card-head">
+            <strong>{{ fw.framework }}</strong>
+            <span class="chip">{{ fw.control_count }} controls</span>
+          </div>
+          <ul class="control-list">
+            {% for ctrl in fw.controls[:8] %}
+            <li>
+              <span class="mono">{{ ctrl.control }}</span>
+              <span class="muted-note">→ {{ ctrl.finding_ids[:4]|join(', ') }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </article>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </section>
 
     {# —— Brain instant explanation —— #}
     <section class="brain-explain">
@@ -45,6 +76,13 @@
           </div>
           <h4>Issue: {{ item.issue }}</h4>
           <p class="finding-desc">{{ item.why }}</p>
+          {% if item.compliance %}
+          <div class="compliance-tags">
+            {% for tag in item.compliance %}
+            <span class="chip chip-compliance">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
           <div class="fix-box">
             <div class="engine-label">How to fix</div>
             <p>{{ item.how_to_fix }}</p>
@@ -113,6 +151,13 @@
           </div>
           <h4>{{ f.title }}</h4>
           <p class="finding-desc">{{ f.description }}</p>
+          {% if f.compliance %}
+          <div class="compliance-tags">
+            {% for tag in f.compliance %}
+            <span class="chip chip-compliance">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
           {% set steps = (f.remediation or {}).steps or [] %}
           <div class="fix-box">
             <div class="engine-label">Proposed solution steps</div>

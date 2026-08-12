@@ -68,10 +68,51 @@
       <div class="kpi-meta">blocked proposals</div>
     </article>
     <article class="kpi kpi-findings">
-      <div class="kpi-label">AI agents online</div>
-      <div class="kpi-value">{{ agents|length }}</div>
-      <div class="kpi-meta">SE · DSO · CLD · AIS</div>
+      <div class="kpi-label">Fleet risk score</div>
+      <div class="kpi-value {{ fleet_risk_class }}">{{ fleet_risk_score }}</div>
+      <div class="kpi-meta">{{ fleet_risk_label }} · 100 = clean</div>
     </article>
+  </section>
+
+  <section class="panel compliance-panel" aria-label="Compliance mapping">
+    <div class="panel-head">
+      <div>
+        <h2>Compliance map</h2>
+        <p>
+          Open findings linked to NIST · ISO 27001 · CIS · SOC 2 · OWASP · PCI
+          ({{ compliance.findings_with_compliance or 0 }} / {{ compliance.findings_total or 0 }} tagged)
+        </p>
+      </div>
+      <span class="chip {{ fleet_risk_class }}">Risk {{ fleet_risk_score }} · {{ fleet_risk_label }}</span>
+    </div>
+    <div class="compliance-grid">
+      {% for fw in compliance.frameworks or [] %}
+      {% if fw.finding_count %}
+      <article class="compliance-card">
+        <div class="compliance-card-head">
+          <strong>{{ fw.framework }}</strong>
+          <span class="chip">{{ fw.control_count }} controls</span>
+        </div>
+        <div class="compliance-stats">
+          <span>{{ fw.finding_count }} findings</span>
+          <span class="chip chip-crit">{{ fw.critical }}c</span>
+          <span class="chip chip-high">{{ fw.high }}h</span>
+        </div>
+        <ul class="control-list">
+          {% for ctrl in fw.controls[:6] %}
+          <li>
+            <span class="mono">{{ ctrl.control }}</span>
+            <span class="muted-note">→ {{ ctrl.finding_ids[:3]|join(', ') }}{% if ctrl.finding_ids|length > 3 %}…{% endif %}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </article>
+      {% endif %}
+      {% endfor %}
+      {% if not compliance.frameworks_hit %}
+      <p class="muted-note">No compliance tags loaded yet — run a cycle, then refresh.</p>
+      {% endif %}
+    </div>
   </section>
 
   <div class="grid grid-agents">
@@ -101,7 +142,7 @@
               <span class="agent-status {% if agent.status == 'WORKING' %}st-work{% else %}st-idle{% endif %}">{{ agent.status }}</span>
             </div>
             <h2>{{ agent.title }}</h2>
-            <p>{{ agent.focus }} · IDs {{ agent.id_prefix }}*</p>
+            <p>{{ agent.focus }} · IDs {{ agent.id_prefix }}* · risk <strong class="{{ agent.risk_class }}">{{ agent.risk_score }}</strong> ({{ agent.risk_label }})</p>
           </div>
           <p class="panel-count">{{ agent.pending }} jobs · {{ agent.findings }} findings</p>
         </div>
@@ -113,6 +154,10 @@
             <span class="engine-chip">{{ eng }}</span>
             {% endfor %}
           </div>
+          <p class="muted-note" style="margin-top:8px;">
+            CI gate: <span class="mono">python worker_gate.py --role {{ agent.key }} --fail-on critical</span>
+            · mock self-test add <span class="mono">--mock</span>
+          </p>
         </div>
 
         {% if agent.jobs %}
@@ -126,6 +171,7 @@
               <div class="job-title">{{ job.title }}</div>
               <div class="job-id">{{ job.job_id }}</div>
               <div class="job-stats">
+                <span class="chip {{ job.risk_class or 'risk-med' }}">Risk {{ job.risk_score if job.risk_score is not none else '—' }}</span>
                 <span class="chip">{{ s.total_findings or 0 }} findings</span>
                 <span class="chip chip-crit">{{ c.critical or 0 }} critical</span>
                 <span class="chip chip-high">{{ c.high or 0 }} high</span>
@@ -171,6 +217,48 @@
       <section class="panel brief-panel">
         <div class="panel-head">
           <div>
+            <h2>Alerts + backlog</h2>
+            <p>Critical/high alerts from cycles · open job backlog</p>
+          </div>
+          <span class="chip">{{ alert_n }} alerts</span>
+        </div>
+        <div class="panel-body">
+          {% if alerts %}
+          <ul class="alert-list">
+            {% for a in alerts[:8] %}
+            <li class="alert-item sev-{{ a.severity or 'info' }}">
+              <span class="sev">{{ a.severity }}</span>
+              <span>{{ a.title }}</span>
+              <span class="mono">{{ a.timestamp }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted-note">No alerts yet — run a cycle with critical/high findings.</p>
+          {% endif %}
+
+          <h3 class="backlog-title">Open backlog</h3>
+          {% if backlog %}
+          <ul class="backlog-list">
+            {% for b in backlog[:10] %}
+            <li>
+              <a href="{{ url_for('job_detail', job_id=b.job_id) }}">{{ b.job_id }}</a>
+              <span class="chip">{{ b.role }}</span>
+              <span class="chip chip-crit">{{ b.critical }}c</span>
+              <span class="chip chip-high">{{ b.high }}h</span>
+              <span class="chip">{{ b.sla_hint }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted-note">Backlog empty — no pending jobs.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="panel brief-panel">
+        <div class="panel-head">
+          <div>
             <h2>Brain brief (report)</h2>
             <p>Read-only summary. Approve jobs on the left.</p>
           </div>
@@ -201,7 +289,7 @@
   </div>
 
   <p class="footer-note">
-    FACE {{ face_version }} · SCROLL TO AGENTS FOR APPROVE/REJECT · FINDINGS = SUM OF OPEN JOBS
+    FACE {{ face_version }} · RISK SCORE + COMPLIANCE MAP · CYCLE ALL 4 · APPROVE → DRAFT (NO AUTO-APPLY)
   </p>
 </main>
 {% endblock %}

@@ -78,14 +78,14 @@
     cycleBtn.addEventListener("click", async () => {
       cycleBtn.disabled = true;
       cycleBtn.textContent = "Scanning...";
-      showToast("Running AI Security mock cycle...");
+      showToast("Running all 4 agents (mock cycle)...");
       try {
         await post("/api/cycle", {
-          roles: "ai-security",
+          roles: "security-engineer,devsecops,cloud,ai-security",
           llm: true,
           provider: "offline",
         });
-        showToast("Cycle complete");
+        showToast("Cycle complete — check alerts + backlog");
         window.setTimeout(() => window.location.reload(), 500);
       } catch (e) {
         showToast(e.message || "Cycle failed");

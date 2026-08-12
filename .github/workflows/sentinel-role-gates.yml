@@ -1,0 +1,61 @@
+# Sentinel Stacks — worker gates for SE / Cloud / AI Security (clone of DevSecOps pattern)
+name: Sentinel Role Gates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate-matrix:
+    name: Gate ${{ matrix.role }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: security-engineer
+            mode: live
+          - role: cloud
+            mode: live
+          - role: ai-security
+            mode: live
+          - role: security-engineer
+            mode: mock-selftest
+          - role: cloud
+            mode: mock-selftest
+          - role: ai-security
+            mode: mock-selftest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Live gate (fail on critical)
+        if: matrix.mode == 'live'
+        run: |
+          python worker_gate.py \
+            --role ${{ matrix.role }} \
+            --target . \
+            --fail-on critical \
+            --report-out gate-${{ matrix.role }}-live.json
+      - name: Mock self-test (must fail)
+        if: matrix.mode == 'mock-selftest'
+        run: |
+          set +e
+          python worker_gate.py \
+            --role ${{ matrix.role }} \
+            --mock \
+            --fail-on critical \
+            --report-out gate-${{ matrix.role }}-mock.json
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "Self-test FAILED for ${{ matrix.role }}: expected critical gate failure"
+            exit 1
+          fi
+          echo "Self-test OK for ${{ matrix.role }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-${{ matrix.role }}-${{ matrix.mode }}
+          path: gate-*.json

@@ -13,9 +13,10 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 
 import ai_brain_agent
 import ai_brain_llm
+import compliance_map
 
 ROOT = Path(__file__).resolve().parent
-FACE_VERSION = "0.1.5-f1"
+FACE_VERSION = "0.3.0-c1"
 
 # Face agent catalog — each Hands pack is one named AI agent + its engines.
 AGENT_CATALOG: list[dict] = [
@@ -154,6 +155,10 @@ def _dashboard_context():
         a_crit = sum(int(((j.get("summary") or {}).get("severity_counts") or {}).get("critical") or 0) for j in ajobs)
         a_high = sum(int(((j.get("summary") or {}).get("severity_counts") or {}).get("high") or 0) for j in ajobs)
         a_findings = sum(int((j.get("summary") or {}).get("total_findings") or 0) for j in ajobs)
+        # Per-agent risk = worst job score among this agent's pending jobs
+        a_scores = [compliance_map.job_risk_score(j) for j in ajobs]
+        a_risk = min(a_scores) if a_scores else 100
+        a_label, a_css = compliance_map.risk_label(a_risk)
         agents.append(
             {
                 **a,
@@ -162,9 +167,20 @@ def _dashboard_context():
                 "critical": a_crit,
                 "high": a_high,
                 "findings": a_findings,
+                "risk_score": a_risk,
+                "risk_label": a_label,
+                "risk_class": a_css,
                 "status": "WORKING" if ajobs else "IDLE",
             }
         )
+
+    # Annotate jobs with risk for cards
+    for j in jobs_sorted:
+        score = compliance_map.job_risk_score(j)
+        label, css = compliance_map.risk_label(score)
+        j["risk_score"] = score
+        j["risk_label"] = label
+        j["risk_class"] = css
 
     # Simple posture label for MSSP header
     if sev_totals["critical"] > 0:
@@ -179,6 +195,17 @@ def _dashboard_context():
     else:
         posture = "CLEAR"
         posture_class = "posture-clear"
+
+    try:
+        import worker_alert
+
+        alerts = worker_alert.list_alerts(ai_brain_agent.DEFAULT_WORKSPACE, limit=20)
+        backlog = worker_alert.backlog_from_jobs(jobs_sorted)
+    except Exception:
+        alerts = []
+        backlog = []
+
+    compliance = compliance_map.fleet_compliance(jobs_sorted, _raw_findings_for_job)
 
     return {
         "face_version": FACE_VERSION,
@@ -198,6 +225,13 @@ def _dashboard_context():
         "rejected_n": len(index.get("rejected_job_ids") or []),
         "last_cycle": index.get("last_cycle_id"),
         "workspace": str(ai_brain_agent.DEFAULT_WORKSPACE),
+        "alerts": alerts,
+        "backlog": backlog,
+        "alert_n": len(alerts),
+        "compliance": compliance,
+        "fleet_risk_score": compliance.get("fleet_risk_score", 100),
+        "fleet_risk_label": compliance.get("fleet_risk_label", "LOW"),
+        "fleet_risk_class": compliance.get("fleet_risk_class", "risk-low"),
     }
 
 
@@ -217,16 +251,33 @@ def _normalize_finding(f: dict) -> dict:
     elif not isinstance(steps, list):
         steps = []
     steps = [str(s) for s in steps if s is not None]
+    compliance = compliance_map.normalize_compliance(f.get("compliance"))
+    frameworks = sorted({compliance_map.classify_control(t) for t in compliance})
     return {
         "id": str(f.get("id") or "UNKNOWN"),
         "severity": str(f.get("severity") or "info").lower(),
         "title": str(f.get("title") or f.get("name") or "Untitled finding"),
         "description": str(f.get("description") or "No description."),
+        "compliance": compliance,
+        "frameworks": frameworks,
         "remediation": {
             "steps": steps,
             "effort": rem.get("effort"),
         },
     }
+
+
+def _raw_findings_for_job(job: dict) -> list[dict]:
+    """Load findings from scan report (with compliance) for rollups."""
+    scan_path = Path(str(job.get("scan_report_path") or ""))
+    if not scan_path.is_file():
+        return []
+    try:
+        report = json.loads(scan_path.read_text(encoding="utf-8-sig"))
+        raw = report.get("findings") or []
+        return [f for f in raw if isinstance(f, dict)]
+    except Exception:
+        return []
 
 
 def _brain_explain_job(job: dict, findings: list[dict]) -> dict:
@@ -271,6 +322,8 @@ def _brain_explain_job(job: dict, findings: list[dict]) -> dict:
                 "issue": f.get("title"),
                 "why": f.get("description"),
                 "how_to_fix": how,
+                "compliance": f.get("compliance") or [],
+                "frameworks": f.get("frameworks") or [],
             }
         )
 
@@ -340,6 +393,13 @@ def _load_job_review(job: dict) -> dict:
         )[:80]
 
     explain = _brain_explain_job(job, findings)
+    risk = compliance_map.job_risk_score(job, findings)
+    risk_label, risk_class = compliance_map.risk_label(risk)
+    compliance = compliance_map.rollup_compliance(
+        findings,
+        job_id=job.get("job_id"),
+        role=job.get("role"),
+    )
     return {
         "findings": findings,
         "findings_count": len(findings),
@@ -349,6 +409,10 @@ def _load_job_review(job: dict) -> dict:
         "kit_exists": kit_exists,
         "scan_path": str(job.get("scan_report_path") or ""),
         "explain": explain,
+        "risk_score": risk,
+        "risk_label": risk_label,
+        "risk_class": risk_class,
+        "compliance": compliance,
     }
 
 
@@ -450,7 +514,9 @@ def api_brief():
 @app.route("/api/cycle", methods=["POST"])
 def api_cycle():
     data = request.get_json(silent=True) or {}
-    roles = data.get("roles") or "ai-security"
+    roles = data.get("roles") or (
+        "security-engineer,devsecops,cloud,ai-security"
+    )
     result = _brain(
         "cycle",
         mock=True,
@@ -459,6 +525,27 @@ def api_cycle():
         llm_provider=data.get("provider") or "offline",
     )
     return jsonify(result)
+
+
+@app.route("/api/alerts")
+def api_alerts():
+    import worker_alert
+
+    return jsonify(
+        {
+            "alerts": worker_alert.list_alerts(ai_brain_agent.DEFAULT_WORKSPACE, limit=50),
+            "version": worker_alert.VERSION,
+        }
+    )
+
+
+@app.route("/api/backlog")
+def api_backlog():
+    import worker_alert
+
+    pending = _brain("pending")
+    jobs = (pending.get("metadata") or {}).get("jobs") or []
+    return jsonify({"backlog": worker_alert.backlog_from_jobs(jobs)})
 
 
 def main():

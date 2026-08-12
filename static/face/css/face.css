@@ -1171,6 +1171,139 @@ a { color: inherit; text-decoration: none; }
   text-decoration: none;
 }
 
+.alert-list, .backlog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.alert-item {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 0.85rem;
+  border-left: 3px solid var(--dim);
+}
+
+.alert-item.sev-critical { border-left-color: var(--red); }
+.alert-item.sev-high { border-left-color: var(--orange); }
+
+.backlog-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  font-size: 0.85rem;
+}
+
+.backlog-list a {
+  color: var(--teal, #2dd4bf);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+}
+
+.backlog-title {
+  margin: 16px 0 8px;
+  font-size: 0.95rem;
+}
+
+.muted-note {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.compliance-panel {
+  margin: 0 0 20px;
+}
+
+.compliance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 4px 16px 16px;
+}
+
+.compliance-grid-sm {
+  padding: 0;
+}
+
+.compliance-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+  padding: 12px 14px;
+}
+
+.compliance-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.compliance-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+.control-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-list li {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  padding-top: 6px;
+}
+
+.compliance-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.chip-compliance {
+  border-color: rgba(96, 165, 250, 0.45);
+  color: #93c5fd;
+  background: rgba(37, 99, 235, 0.15);
+}
+
+.kpi-value.risk-crit,
+.chip.risk-crit,
+strong.risk-crit { color: var(--red); }
+.kpi-value.risk-high,
+.chip.risk-high,
+strong.risk-high { color: var(--orange); }
+.kpi-value.risk-med,
+.chip.risk-med,
+strong.risk-med { color: var(--amber, #fbbf24); }
+.kpi-value.risk-low,
+.chip.risk-low,
+strong.risk-low { color: var(--teal, #2dd4bf); }
+
 .footer-note {
   margin-top: 18px;
   color: var(--dim);

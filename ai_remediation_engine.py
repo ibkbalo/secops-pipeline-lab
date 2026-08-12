@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 TOOL_ID = "remediate_findings_hardening_kit"
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 DOMAIN = "governance"
 SUBDOMAIN = "remediation/hardening-kit"
 SENTINEL = "remediation"
@@ -1158,6 +1158,216 @@ TEACHING_GUIDES: dict[str, dict] = {
             },
         ],
     },
+    "DEVSEC-SEC-001": {
+        "why": (
+            "A tracked API key in git is world-readable to anyone with repo access (or public clone). "
+            "Treat it as compromised until rotated and removed from history if needed."
+        ),
+        "platforms": ["git", "github", "gitleaks", "ci"],
+        "success": (
+            "Secret removed from default branch; key rotated; secret scanning / gitleaks clean; "
+            "DEVSEC-SEC-001 cleared on re-scan."
+        ),
+        "guide_steps": [
+            {
+                "action": "Revoke and rotate the exposed API key immediately.",
+                "detail": (
+                    "In the provider console, disable the old key, create a new one, update the app "
+                    "via secrets manager / GitHub Secrets — never re-commit the new value."
+                ),
+                "why": "Attackers may already have the old key from git history or clones.",
+            },
+            {
+                "action": "Remove the secret from the repo and stop tracking it.",
+                "detail": (
+                    "Delete the file or replace with env var references. Add patterns to `.gitignore`. "
+                    "If it was pushed publicly, rewrite history under change control (BFG/filter-repo)."
+                ),
+                "why": "Leaving the secret in git keeps the leak alive.",
+            },
+            {
+                "action": "Enable secret scanning + pre-commit/CI gitleaks (see configs/DEVSEC-SEC-001.conf).",
+                "detail": "Turn on push protection where available; add gitleaks to CI as a required check.",
+                "why": "Prevents the next secret from landing the same way.",
+            },
+        ],
+    },
+    "DEVSEC-CICD-001": {
+        "why": (
+            "Workflow `permissions: write-all` (or broad defaults) lets a compromised Action or PR "
+            "modify contents, packages, or checks — high blast radius."
+        ),
+        "platforms": ["github-actions", "ci"],
+        "success": (
+            "Top-level `permissions: contents: read` (or tighter); elevates only on jobs that need them; "
+            "DEVSEC-CICD-001 cleared."
+        ),
+        "guide_steps": [
+            {
+                "action": "Set least-privilege workflow permissions.",
+                "detail": (
+                    "At workflow top: `permissions: contents: read`. Grant write only on the specific job "
+                    "that publishes/releases. See `configs/DEVSEC-CICD-001.conf`."
+                ),
+                "why": "Limits damage if a step or third-party Action is abused.",
+            },
+            {
+                "action": "Pin Actions to full commit SHAs and remove curl|bash installers.",
+                "detail": "Combine with DEVSEC-CICD pin/no-curl controls in the same kit.",
+                "why": "Stops supply-chain drift and remote code pipe installs.",
+            },
+            {
+                "action": "Make the DevSecOps gate a required status check.",
+                "detail": "Use `worker_gate.py --role devsecops` in CI; require it on protected branches.",
+                "why": "Blocks merge when critical DEVSEC findings remain.",
+            },
+        ],
+    },
+    "DEVSEC-CTR-002": {
+        "why": "Containers running as root expand blast radius after image or app compromise.",
+        "platforms": ["docker", "kubernetes"],
+        "success": "Image USER is non-root; re-scan clears DEVSEC-CTR-002.",
+        "guide_steps": [
+            {
+                "action": "Add a non-root USER in the Dockerfile.",
+                "detail": "Create user/group, chown app dirs, `USER appuser`. See configs/DEVSEC-CTR-002.conf samples.",
+                "why": "Reduces privilege if the container is exploited.",
+            },
+            {
+                "action": "Drop Linux capabilities and read-only root FS where possible.",
+                "detail": "In Compose/K8s securityContext: runAsNonRoot, allowPrivilegeEscalation false.",
+                "why": "Defense in depth beyond USER directive.",
+            },
+        ],
+    },
+    "CLOUD-IAM-001": {
+        "why": (
+            "Root account without MFA is a single credential away from full account compromise."
+        ),
+        "platforms": ["aws-iam", "console"],
+        "success": "Root MFA enabled; CLOUD-IAM-001 cleared on re-scan.",
+        "guide_steps": [
+            {
+                "action": "Enable hardware or virtual MFA on the AWS root user.",
+                "detail": "Use the console security credentials page; store backup codes in a vault.",
+                "why": "Root bypasses almost all IAM guardrails.",
+            },
+            {
+                "action": "Stop daily use of root; use IAM roles / SSO instead.",
+                "detail": "Break-glass only for root; alert on root console login.",
+                "why": "Reduces exposure window for the most privileged identity.",
+            },
+        ],
+    },
+    "AISEC-KEY-001": {
+        "why": "Leaked LLM API keys burn budget and can exfiltrate prompts/data via attacker traffic.",
+        "platforms": ["llm", "secrets", "ci"],
+        "success": "Key rotated; stored in secret manager; AISEC key finding cleared.",
+        "guide_steps": [
+            {
+                "action": "Revoke the exposed model API key and issue a new one.",
+                "detail": "Update only via secret store / CI secrets — never commit.",
+                "why": "Old key may already be in logs or prior commits.",
+            },
+            {
+                "action": "Add key scanning to AI app CI (`worker_gate.py --role ai-security`).",
+                "detail": "Fail PRs on critical AISEC key findings.",
+                "why": "Stops repeat leaks in AI service repos.",
+            },
+        ],
+    },
+    "PERIM-NET-003": {
+        "why": "SSH (22) open to the internet is a top brute-force and ransomware entry path.",
+        "platforms": ["aws-sg", "nginx", "vpn"],
+        "success": "SSH limited to trusted CIDR/VPN; PERIM-NET-003 cleared on re-scan.",
+        "guide_steps": [
+            {
+                "action": "Restrict SSH security-group / firewall to trusted CIDRs only.",
+                "detail": "Use terraform sample for this check_id; remove 0.0.0.0/0 on port 22.",
+                "why": "Internet-wide SSH is continuously scanned and attacked.",
+            },
+            {
+                "action": "Prefer SSM/Bastion/VPN instead of public SSH.",
+                "detail": "Disable public SSH where remote admin can use Session Manager.",
+                "why": "Removes the exposed management surface entirely.",
+            },
+        ],
+    },
+    "PERIM-PHISH-001": {
+        "why": "Missing/weak DMARC lets attackers spoof your domain in BEC and phishing.",
+        "platforms": ["dns", "email"],
+        "success": "DMARC p=quarantine or reject published; PERIM-PHISH-001 cleared.",
+        "guide_steps": [
+            {
+                "action": "Publish a DMARC record starting with p=none monitoring, then quarantine/reject.",
+                "detail": "See configs/PERIM-PHISH-001.conf; align SPF and DKIM first.",
+                "why": "Receivers need policy + authentication alignment to block spoofing.",
+            },
+            {
+                "action": "Monitor aggregate reports before enforcing reject.",
+                "detail": "Use rua= mailto; fix legitimate senders that fail alignment.",
+                "why": "Avoids breaking mail while closing the spoofing gap.",
+            },
+        ],
+    },
+    "AISEC-PI-001": {
+        "why": "Unisolated system prompts are easy to override — model follows attacker instructions.",
+        "platforms": ["llm", "appsec"],
+        "success": "System prompt separated and defended; AISEC-PI-001 cleared.",
+        "guide_steps": [
+            {
+                "action": "Isolate system instructions from user/tool content.",
+                "detail": "Use dedicated system channel; never concatenate raw user text into system prompt. See configs/AISEC-PI-001.conf.",
+                "why": "Injection succeeds when untrusted text shares the instruction channel.",
+            },
+            {
+                "action": "Add output filtering and tool allow-lists for agents.",
+                "detail": "Deny high-risk tools by default; require human confirm for side effects.",
+                "why": "Limits damage when injection still slips through.",
+            },
+        ],
+    },
+    "CLOUD-STO-002": {
+        "why": "Public S3 (or equivalent) buckets leak customer data at internet scale.",
+        "platforms": ["aws-s3", "terraform"],
+        "success": "Public access block on; bucket policy private; CLOUD-STO-002 cleared.",
+        "guide_steps": [
+            {
+                "action": "Enable S3 public access block (account + bucket).",
+                "detail": "Apply terraform sample in kit; verify ACLs and bucket policy.",
+                "why": "Misconfigured public buckets are a leading cloud breach class.",
+            },
+            {
+                "action": "Audit objects already exposed and rotate any leaked credentials.",
+                "detail": "Check access logs; treat exposed objects as compromised.",
+                "why": "Locking the bucket does not unsay prior downloads.",
+            },
+        ],
+    },
+    "CLOUD-NET-001": {
+        "why": "Security groups with SSH/RDP/DB open to 0.0.0.0/0 invite compromise.",
+        "platforms": ["aws-sg", "terraform"],
+        "success": "Management/DB ports limited to trusted CIDR; CLOUD-NET-001 cleared.",
+        "guide_steps": [
+            {
+                "action": "Replace world-open SG rules with trusted network ranges.",
+                "detail": "Use kit terraform for SSH SG harden; prefer VPN/bastion.",
+                "why": "Open management ports are mass-scanned continuously.",
+            },
+        ],
+    },
+    "CLOUD-IAM-010": {
+        "why": "IAM Action:* Resource:* is effectively admin — one stolen principal owns the account.",
+        "platforms": ["aws-iam", "terraform"],
+        "success": "No admin-star policies attached; CLOUD-IAM-010 cleared.",
+        "guide_steps": [
+            {
+                "action": "Remove or replace Action:* Resource:* policies with least privilege.",
+                "detail": "Map each role to required actions; use Access Analyzer.",
+                "why": "Wildcards maximize blast radius after credential theft.",
+            },
+        ],
+    },
 }
 
 
@@ -1167,6 +1377,12 @@ TEACHING_GUIDES: dict[str, dict] = {
 CONF_DEVSEC_SECRET_SCAN = """\
 # {check_id} — {name}
 # Generated by Sentinel Stacks Remediation Engine {version}
+#
+# ═══ HOW TO USE THIS CONFIG ═══
+# 1. Pair with runbooks/{check_id}.yml (same finding ID on Face).
+# 2. Rotate the leaked secret FIRST, then clean the repo.
+# 3. Enable the scanner snippets below in CI (required check via worker_gate).
+# 4. This file does NOT auto-apply.
 
 # 1) Enable GitHub Advanced Security / secret scanning + push protection
 # 2) Add gitleaks (or trufflehog) pre-commit + CI:
@@ -1180,6 +1396,10 @@ CONF_DEVSEC_SECRET_SCAN = """\
 CONF_DEVSEC_CI_PERMISSIONS = """\
 # {check_id} — {name}
 # Generated by Sentinel Stacks Remediation Engine {version}
+#
+# ═══ HOW TO USE THIS CONFIG ═══
+# Paste least-privilege permissions into the workflow named in the finding.
+# Pair with runbooks/{check_id}.yml. Does not auto-apply.
 
 # At workflow top-level (least privilege default):
 permissions:
@@ -2316,7 +2536,14 @@ FIX_MAP: dict[str, dict] = {
 
     # ── DevSecOps (DEVSEC-*) — maps scan_devsecops_pack 0.6.0-d6 bar (62 IDs) ──
     # Secrets (SEC)
-    "DEVSEC-SEC-001": _fix("Tracked Secret — Generic API Key", "DevSecOps/Secrets", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
+    "DEVSEC-SEC-001": _fix(
+        "Tracked Secret — Generic API Key", "DevSecOps/Secrets", "both",
+        conf=CONF_DEVSEC_SECRET_SCAN, effort="high",
+        why=TEACHING_GUIDES["DEVSEC-SEC-001"]["why"],
+        guide_steps=TEACHING_GUIDES["DEVSEC-SEC-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["DEVSEC-SEC-001"]["platforms"],
+        success=TEACHING_GUIDES["DEVSEC-SEC-001"]["success"],
+    ),
     "DEVSEC-SEC-002": _fix("Tracked Secret — AWS Access Key", "DevSecOps/Secrets", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
     "DEVSEC-SEC-003": _fix("Tracked Secret — GitHub PAT", "DevSecOps/Secrets", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
     "DEVSEC-SEC-004": _fix("CI Plaintext Secret Env", "DevSecOps/Secrets", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
@@ -2330,7 +2557,14 @@ FIX_MAP: dict[str, dict] = {
     "DEVSEC-SCA-006": _fix("Dependency Update Automation Disabled", "DevSecOps/SCA", "both", conf=CONF_DEVSEC_SCA, effort="low"),
     # Container
     "DEVSEC-CTR-001": _fix("Floating/Unpinned Base Image", "DevSecOps/Container", "both", conf=CONF_DEVSEC_DOCKERFILE, effort="medium"),
-    "DEVSEC-CTR-002": _fix("Container Runs as Root", "DevSecOps/Container", "both", conf=CONF_DEVSEC_DOCKERFILE, effort="high"),
+    "DEVSEC-CTR-002": _fix(
+        "Container Runs as Root", "DevSecOps/Container", "both",
+        conf=CONF_DEVSEC_DOCKERFILE, effort="high",
+        why=TEACHING_GUIDES["DEVSEC-CTR-002"]["why"],
+        guide_steps=TEACHING_GUIDES["DEVSEC-CTR-002"]["guide_steps"],
+        platforms=TEACHING_GUIDES["DEVSEC-CTR-002"]["platforms"],
+        success=TEACHING_GUIDES["DEVSEC-CTR-002"]["success"],
+    ),
     "DEVSEC-CTR-003": _fix("Missing HEALTHCHECK", "DevSecOps/Container", "both", conf=CONF_DEVSEC_DOCKERFILE, effort="low"),
     "DEVSEC-CTR-004": _fix("API Container Runs as Root", "DevSecOps/Container", "both", conf=CONF_DEVSEC_DOCKERFILE, effort="high"),
     "DEVSEC-CTR-005": _fix("API Missing HEALTHCHECK", "DevSecOps/Container", "both", conf=CONF_DEVSEC_DOCKERFILE, effort="low"),
@@ -2351,7 +2585,14 @@ FIX_MAP: dict[str, dict] = {
     "DEVSEC-SAST-005": _fix("SAST Not Required in CI", "DevSecOps/SAST", "both", conf=CONF_DEVSEC_SAST, effort="medium"),
     "DEVSEC-SAST-006": _fix("Dangerous Sinks Without Review Coverage", "DevSecOps/SAST", "both", conf=CONF_DEVSEC_SAST, effort="medium"),
     # CI/CD
-    "DEVSEC-CICD-001": _fix("Overbroad Workflow Permissions (ci.yml)", "DevSecOps/CICD", "both", conf=CONF_DEVSEC_CI_PERMISSIONS, effort="high"),
+    "DEVSEC-CICD-001": _fix(
+        "Overbroad Workflow Permissions (ci.yml)", "DevSecOps/CICD", "both",
+        conf=CONF_DEVSEC_CI_PERMISSIONS, effort="high",
+        why=TEACHING_GUIDES["DEVSEC-CICD-001"]["why"],
+        guide_steps=TEACHING_GUIDES["DEVSEC-CICD-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["DEVSEC-CICD-001"]["platforms"],
+        success=TEACHING_GUIDES["DEVSEC-CICD-001"]["success"],
+    ),
     "DEVSEC-CICD-002": _fix("Unpinned Actions (ci.yml)", "DevSecOps/CICD", "both", conf=CONF_DEVSEC_PIN_ACTIONS, effort="medium"),
     "DEVSEC-CICD-003": _fix("No Security Jobs in Pipeline (ci.yml)", "DevSecOps/CICD", "both", conf=CONF_DEVSEC_SECURITY_JOBS, effort="medium"),
     "DEVSEC-CICD-004": _fix("Dangerous curl|bash Install (ci.yml)", "DevSecOps/CICD", "both", conf=CONF_DEVSEC_NO_CURL_BASH, effort="high"),
@@ -2390,7 +2631,14 @@ FIX_MAP: dict[str, dict] = {
 
     # ── Cloud SE (CLOUD-*) — maps scan_cloud_pack 0.1.0-c1 bar (170 IDs) ──
     # IAM
-    "CLOUD-IAM-001": _fix("AWS root account MFA enabled", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_ROOT_MFA, effort="high"),
+    "CLOUD-IAM-001": _fix(
+        "AWS root account MFA enabled", "Cloud/IAM", "both",
+        conf=CONF_CLOUD_IAM_ROOT_MFA, effort="high",
+        why=TEACHING_GUIDES["CLOUD-IAM-001"]["why"],
+        guide_steps=TEACHING_GUIDES["CLOUD-IAM-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["CLOUD-IAM-001"]["platforms"],
+        success=TEACHING_GUIDES["CLOUD-IAM-001"]["success"],
+    ),
     "CLOUD-IAM-002": _fix("AWS IAM password policy minimum length >= 14", "Cloud/IAM", "both", tf=AWS_TF_IAM_PASSWORD, effort="low"),
     "CLOUD-IAM-003": _fix("AWS IAM password complexity (uppercase + symbols)", "Cloud/IAM", "both", tf=AWS_TF_IAM_PASSWORD, effort="low"),
     "CLOUD-IAM-004": _fix("AWS IAM password max age <= 90 days", "Cloud/IAM", "both", tf=AWS_TF_IAM_PASSWORD, effort="low"),
@@ -2399,7 +2647,14 @@ FIX_MAP: dict[str, dict] = {
     "CLOUD-IAM-007": _fix("No IAM users with both console password and active access keys", "Cloud/IAM", "runbook", effort="medium"),
     "CLOUD-IAM-008": _fix("All console IAM users have MFA", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_USER_MFA, effort="high"),
     "CLOUD-IAM-009": _fix("No IAM access keys older than 90 days", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_KEY_AGE, effort="medium"),
-    "CLOUD-IAM-010": _fix("No IAM policies with Action:* Resource:*", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_NO_ADMIN_STAR, effort="high"),
+    "CLOUD-IAM-010": _fix(
+        "No IAM policies with Action:* Resource:*", "Cloud/IAM", "both",
+        conf=CONF_CLOUD_IAM_NO_ADMIN_STAR, effort="high",
+        why=TEACHING_GUIDES["CLOUD-IAM-010"]["why"],
+        guide_steps=TEACHING_GUIDES["CLOUD-IAM-010"]["guide_steps"],
+        platforms=TEACHING_GUIDES["CLOUD-IAM-010"]["platforms"],
+        success=TEACHING_GUIDES["CLOUD-IAM-010"]["success"],
+    ),
     "CLOUD-IAM-011": _fix("IAM Access Analyzer enabled", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_ACCESS_ANALYZER, effort="low"),
     "CLOUD-IAM-012": _fix("IAM Identity Center (SSO) preferred over long-lived IAM users", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_SSO, effort="high"),
     "CLOUD-IAM-013": _fix("AWS Support IAM role present for incident response", "Cloud/IAM", "both", conf=CONF_CLOUD_IAM_SUPPORT_ROLE, effort="low"),
@@ -2409,7 +2664,14 @@ FIX_MAP: dict[str, dict] = {
     "CLOUD-IAM-017": _fix("Azure privileged role MFA enforced", "Cloud/IAM", "both", conf=CONF_CLOUD_AZ_PRIV_MFA, effort="high"),
     # STO
     "CLOUD-STO-001": _fix("S3 account public access block fully enabled", "Cloud/Storage", "both", tf=AWS_TF_S3_PUBLIC_BLOCK, effort="high"),
-    "CLOUD-STO-002": _fix("S3 bucket not public: customer-data-backup", "Cloud/Storage", "both", tf=AWS_TF_S3_PUBLIC_BLOCK, effort="high"),
+    "CLOUD-STO-002": _fix(
+        "S3 bucket not public: customer-data-backup", "Cloud/Storage", "both",
+        tf=AWS_TF_S3_PUBLIC_BLOCK, effort="high",
+        why=TEACHING_GUIDES["CLOUD-STO-002"]["why"],
+        guide_steps=TEACHING_GUIDES["CLOUD-STO-002"]["guide_steps"],
+        platforms=TEACHING_GUIDES["CLOUD-STO-002"]["platforms"],
+        success=TEACHING_GUIDES["CLOUD-STO-002"]["success"],
+    ),
     "CLOUD-STO-003": _fix("S3 default encryption: customer-data-backup", "Cloud/Storage", "both", tf=AWS_TF_S3_ENCRYPTION, effort="low"),
     "CLOUD-STO-004": _fix("S3 access logging: customer-data-backup", "Cloud/Storage", "both", tf=AWS_TF_S3_LOGGING, effort="medium"),
     "CLOUD-STO-005": _fix("S3 versioning: customer-data-backup", "Cloud/Storage", "both", tf=AWS_TF_S3_VERSIONING, effort="medium"),
@@ -2431,7 +2693,14 @@ FIX_MAP: dict[str, dict] = {
     "CLOUD-STO-021": _fix("Storage shared key access disabled: applogssa", "Cloud/Storage", "both", tf=AZ_TF_STORAGE_SHARED_KEY, effort="medium"),
     "CLOUD-STO-022": _fix("Storage network default deny: applogssa", "Cloud/Storage", "both", tf=AZ_TF_STORAGE_NETWORK, effort="medium"),
     # NET
-    "CLOUD-NET-001": _fix("Security group open management/DB port to world: sg-open-ssh", "Cloud/Network", "both", tf=AWS_TF_SG_SSH, effort="high"),
+    "CLOUD-NET-001": _fix(
+        "Security group open management/DB port to world: sg-open-ssh", "Cloud/Network", "both",
+        tf=AWS_TF_SG_SSH, effort="high",
+        why=TEACHING_GUIDES["CLOUD-NET-001"]["why"],
+        guide_steps=TEACHING_GUIDES["CLOUD-NET-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["CLOUD-NET-001"]["platforms"],
+        success=TEACHING_GUIDES["CLOUD-NET-001"]["success"],
+    ),
     "CLOUD-NET-002": _fix("Security group open management/DB port to world: sg-open-rdp", "Cloud/Network", "both", tf=AWS_TF_SG_RDP, effort="high"),
     "CLOUD-NET-003": _fix("Security group broad ingress from world: sg-open-rdp", "Cloud/Network", "both", tf=AWS_TF_SG_RDP, effort="medium"),
     "CLOUD-NET-004": _fix("VPC flow logs enabled: vpc-main", "Cloud/Network", "both", tf=AWS_TF_FLOW_LOGS, effort="medium"),
@@ -2575,7 +2844,14 @@ FIX_MAP: dict[str, dict] = {
     # -- Security Engineer pack (PERIM-*) -- scan_security_engineer_pack 0.6.0-p6 bar (53 IDs) --
     "PERIM-NET-001": _fix("Deprecated TLS Protocol (TLS 1.0/1.1)", "Perimeter/Network", "both", conf=CONF_TLS_REDIRECT, effort="medium"),
     "PERIM-NET-002": _fix("TLS Certificate Expired", "Perimeter/Network", "both", conf=CONF_CLOUD_ACM_EXPIRY, effort="high"),
-    "PERIM-NET-003": _fix("Risky Port Open: SSH (22)", "Perimeter/Network", "both", tf=AWS_TF_SG_SSH, effort="medium"),
+    "PERIM-NET-003": _fix(
+        "Risky Port Open: SSH (22)", "Perimeter/Network", "both",
+        tf=AWS_TF_SG_SSH, effort="medium",
+        why=TEACHING_GUIDES["PERIM-NET-003"]["why"],
+        guide_steps=TEACHING_GUIDES["PERIM-NET-003"]["guide_steps"],
+        platforms=TEACHING_GUIDES["PERIM-NET-003"]["platforms"],
+        success=TEACHING_GUIDES["PERIM-NET-003"]["success"],
+    ),
     "PERIM-NET-004": _fix("Risky Port Open: HTTP-Alt (8080)", "Perimeter/Network", "runbook", effort="medium"),
     "PERIM-NET-005": _fix("Risky Port Open: MySQL (3306)", "Perimeter/Network", "runbook", effort="critical"),
     "PERIM-NET-006": _fix("No CDN/WAF on Public Endpoint", "Perimeter/Network", "both", conf=CONF_PERIM_WAF, effort="medium"),
@@ -2619,7 +2895,14 @@ FIX_MAP: dict[str, dict] = {
     "PERIM-GOV-002": _fix("Privacy Policy Not Linked", "Perimeter/Governance", "runbook", effort="low"),
     "PERIM-GOV-003": _fix("Server Version Banner Leak", "Perimeter/Governance", "both", conf=CONF_NGINX_HEADERS, effort="medium"),
     "PERIM-GOV-004": _fix("HSTS Missing or Too Short", "Perimeter/Governance", "both", conf=CONF_HSTS, effort="medium"),
-    "PERIM-PHISH-001": _fix("DMARC Policy Not Enforced", "Perimeter/Phishing", "both", conf=CONF_PERIM_DMARC, effort="high"),
+    "PERIM-PHISH-001": _fix(
+        "DMARC Policy Not Enforced", "Perimeter/Phishing", "both",
+        conf=CONF_PERIM_DMARC, effort="high",
+        why=TEACHING_GUIDES["PERIM-PHISH-001"]["why"],
+        guide_steps=TEACHING_GUIDES["PERIM-PHISH-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["PERIM-PHISH-001"]["platforms"],
+        success=TEACHING_GUIDES["PERIM-PHISH-001"]["success"],
+    ),
     "PERIM-PHISH-002": _fix("SPF Record Missing", "Perimeter/Phishing", "both", conf=CONF_PERIM_SPF, effort="high"),
     "PERIM-PHISH-003": _fix("DKIM Not Configured", "Perimeter/Phishing", "both", conf=CONF_PERIM_DKIM, effort="medium"),
     "PERIM-PHISH-004": _fix("Email Authentication Failure", "Perimeter/Phishing", "runbook", effort="critical"),
@@ -2642,7 +2925,14 @@ FIX_MAP: dict[str, dict] = {
     "PERIM-AST-002": _fix("Expanded Subdomain Attack Surface", "Perimeter/Asset", "both", conf=CONF_PERIM_ASSET, effort="medium"),
 
     # -- AI Security Engineer pack (AISEC-*) -- scan_ai_security_pack 0.6.0-a6 / 0.7.0-a7 bar (43 IDs) --
-    "AISEC-PI-001": _fix("System Prompt Not Isolated", "AISecurity/PromptInjection", "both", conf=CONF_AISEC_PROMPT_ISOLATION, effort="high"),
+    "AISEC-PI-001": _fix(
+        "System Prompt Not Isolated", "AISecurity/PromptInjection", "both",
+        conf=CONF_AISEC_PROMPT_ISOLATION, effort="high",
+        why=TEACHING_GUIDES["AISEC-PI-001"]["why"],
+        guide_steps=TEACHING_GUIDES["AISEC-PI-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["AISEC-PI-001"]["platforms"],
+        success=TEACHING_GUIDES["AISEC-PI-001"]["success"],
+    ),
     "AISEC-PI-002": _fix("Indirect Prompt Injection via Documents", "AISecurity/PromptInjection", "both", conf=CONF_AISEC_PROMPT_ISOLATION, effort="high"),
     "AISEC-PI-003": _fix("Jailbreak Filter Disabled", "AISecurity/PromptInjection", "both", conf=CONF_AISEC_JAILBREAK, effort="medium"),
     "AISEC-PI-004": _fix("Unblocked Jailbreak Sample (DAN)", "AISecurity/PromptInjection", "both", conf=CONF_AISEC_JAILBREAK, effort="medium"),
@@ -2661,7 +2951,14 @@ FIX_MAP: dict[str, dict] = {
     "AISEC-AGT-003": _fix("Empty Agent Tool Allowlist", "AISecurity/AgentTools", "both", conf=CONF_AISEC_AGENT, effort="medium"),
     "AISEC-AGT-004": _fix("No SSRF Protection on Agent Network Tools", "AISecurity/AgentTools", "both", conf=CONF_AISEC_AGENT, effort="medium"),
     "AISEC-AGT-005": _fix("Exfiltration via Tool Arguments", "AISecurity/AgentTools", "both", conf=CONF_AISEC_AGENT, effort="high"),
-    "AISEC-KEY-001": _fix("LLM Provider Key in Tracked File (OpenAI)", "AISecurity/LLMKeys", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
+    "AISEC-KEY-001": _fix(
+        "LLM Provider Key in Tracked File (OpenAI)", "AISecurity/LLMKeys", "both",
+        conf=CONF_DEVSEC_SECRET_SCAN, effort="high",
+        why=TEACHING_GUIDES["AISEC-KEY-001"]["why"],
+        guide_steps=TEACHING_GUIDES["AISEC-KEY-001"]["guide_steps"],
+        platforms=TEACHING_GUIDES["AISEC-KEY-001"]["platforms"],
+        success=TEACHING_GUIDES["AISEC-KEY-001"]["success"],
+    ),
     "AISEC-KEY-002": _fix("LLM Provider Key in Tracked File (Anthropic)", "AISecurity/LLMKeys", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="high"),
     "AISEC-KEY-003": _fix("LLM Key Secret Scanning Disabled in CI", "AISecurity/LLMKeys", "both", conf=CONF_DEVSEC_SECRET_SCAN, effort="medium"),
     "AISEC-OUT-001": _fix("No PII Redaction on Model Outputs", "AISecurity/OutputFiltering", "both", conf=CONF_AISEC_OUTPUT, effort="medium"),

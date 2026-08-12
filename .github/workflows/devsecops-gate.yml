@@ -1,0 +1,64 @@
+# Sentinel Stacks — DevSecOps CI gate
+# Fails the check when critical DEVSEC-* findings are present.
+# Customer repos: leave mock off (live scan of checkout).
+# Self-test job proves the gate fails correctly on the vulnerable fixture.
+
+name: DevSecOps Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  gate-repo-live:
+    name: DevSecOps gate (live checkout)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run DevSecOps gate
+        run: |
+          python worker_gate.py \
+            --role devsecops \
+            --target . \
+            --fail-on critical \
+            --report-out gate-devsecops-live.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-devsecops-live
+          path: gate-devsecops-live.json
+
+  gate-selftest-mock:
+    name: Gate self-test (mock must FAIL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Expect critical findings to fail the gate
+        run: |
+          set +e
+          python worker_gate.py \
+            --role devsecops \
+            --mock \
+            --fail-on critical \
+            --report-out gate-devsecops-mock.json
+          code=$?
+          set -e
+          echo "exit_code=$code"
+          if [ "$code" -eq 0 ]; then
+            echo "Self-test FAILED: mock vulnerable pack should not pass critical gate"
+            exit 1
+          fi
+          echo "Self-test OK: gate correctly failed on critical DEVSEC findings"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-devsecops-mock
+          path: gate-devsecops-mock.json

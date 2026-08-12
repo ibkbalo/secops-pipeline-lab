@@ -32,7 +32,7 @@ from typing import Any
 import ai_brain_llm
 
 TOOL_ID = "orchestrate_role_brain"
-VERSION = "0.3.0-b3"
+VERSION = "0.4.0-w1"
 DOMAIN = "command-center"
 SUBDOMAIN = "brain/role-orchestration"
 SENTINEL = "command"
@@ -138,11 +138,13 @@ def _ensure_workspace(workspace: Path) -> dict[str, Path]:
         "jobs": workspace / "jobs",
         "scans": workspace / "scans",
         "briefs": workspace / "briefs",
+        "alerts": workspace / "alerts",
+        "drafts": workspace / "drafts",
         "index": workspace / "index.json",
         "audit": workspace / "audit.jsonl",
         "watch": workspace / "watch_state.json",
     }
-    for key in ("cycles", "jobs", "scans", "briefs"):
+    for key in ("cycles", "jobs", "scans", "briefs", "alerts", "drafts"):
         paths[key].mkdir(exist_ok=True)
     if not paths["index"].is_file():
         _write_json(
@@ -506,6 +508,23 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         },
     )
 
+    # Critical/high alerts (local jsonl + optional webhook) — never auto-apply
+    alerts_emitted: list[dict[str, Any]] = []
+    try:
+        import worker_alert
+
+        alert_jobs: list[dict[str, Any]] = list(jobs_created)
+        for d in jobs_deduped:
+            jid = d.get("job_id")
+            if not jid:
+                continue
+            jp = paths["jobs"] / f"{jid}.json"
+            if jp.is_file():
+                alert_jobs.append(_read_json(jp))
+        alerts_emitted = worker_alert.emit_from_jobs(workspace, alert_jobs)
+    except Exception as alert_exc:
+        errors.append(f"alert_emit:{alert_exc}")
+
     cycle_doc = {
         "cycle_id": cycle_id,
         "created_at": _now(),
@@ -515,11 +534,13 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         "jobs_created": [j["job_id"] for j in jobs_created],
         "jobs_deduped": jobs_deduped,
         "errors": errors,
+        "alerts_emitted": len(alerts_emitted),
         "totals": {
             "roles_run": len(roles),
             "jobs_pending_approval": len(jobs_created),
             "jobs_deduped": len(jobs_deduped),
             "findings": all_findings_count,
+            "alerts": len(alerts_emitted),
         },
         "license": LICENSE_HOOK,
     }
@@ -759,12 +780,25 @@ def decide_job(params: dict[str, Any], decision: str) -> dict[str, Any]:
     if decision == "approve":
         job["status"] = "approved"
         job["manager_decision"] = "approved"
-        # Apply is intentionally NOT implemented — Face/actuation later.
+        # Apply is intentionally NOT implemented — draft bundle only (dry-run).
         job["apply_status"] = "not_executed"
         job["apply_note"] = (
-            "Manager approved the proposed kit. Cloud/repo apply is reserved for a later "
-            "controlled actuation module. Kit remains dry_run artifacts only."
+            "Manager approved the proposed kit. Draft fix bundle may be written under "
+            "brain_workspace/drafts/ (dry-run). Cloud/repo apply remains forbidden."
         )
+        try:
+            import worker_draft
+
+            draft = worker_draft.create_draft_bundle(workspace, job, enabled=True)
+            job["draft_dir"] = draft.get("draft_dir")
+            job["draft_meta"] = draft.get("meta")
+            if draft.get("ok"):
+                job["apply_note"] = (
+                    f"Approved. Dry-run draft bundle at {draft.get('draft_dir')}. "
+                    "No production apply. Open a human PR from DRAFT_PR.md when ready."
+                )
+        except Exception as draft_exc:
+            job["draft_error"] = str(draft_exc)
     else:
         job["status"] = "rejected"
         job["manager_decision"] = "rejected"
