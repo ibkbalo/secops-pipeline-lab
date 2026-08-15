@@ -78,19 +78,40 @@
     cycleBtn.addEventListener("click", async () => {
       cycleBtn.disabled = true;
       cycleBtn.textContent = "Scanning...";
-      showToast("Running all 4 agents (mock cycle)...");
+      showToast("Running Cloud agent (live AWS)...");
       try {
+        // Live Cloud only — do not re-inject mock vulns from other agents.
         await post("/api/cycle", {
-          roles: "security-engineer,devsecops,cloud,ai-security",
+          roles: "cloud",
+          mock: false,
           llm: true,
           provider: "offline",
         });
-        showToast("Cycle complete — check alerts + backlog");
+        showToast("Live Cloud cycle complete");
         window.setTimeout(() => window.location.reload(), 500);
       } catch (e) {
         showToast(e.message || "Cycle failed");
         cycleBtn.disabled = false;
         cycleBtn.textContent = "Run AI cycle";
+      }
+    });
+  }
+
+  const cisoBtn = document.getElementById("btn-ciso");
+  if (cisoBtn) {
+    cisoBtn.addEventListener("click", async () => {
+      cisoBtn.disabled = true;
+      cisoBtn.textContent = "Writing…";
+      showToast("Generating CISO posture report...");
+      try {
+        const res = await post("/api/ciso-report", {});
+        const id = (res && res.metadata && res.metadata.ciso_report && res.metadata.ciso_report.report_id) || "report";
+        showToast("CISO report ready: " + id);
+        window.setTimeout(() => window.location.reload(), 600);
+      } catch (e) {
+        showToast(e.message || "CISO report failed");
+        cisoBtn.disabled = false;
+        cisoBtn.textContent = "CISO report";
       }
     });
   }

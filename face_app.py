@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -16,7 +17,17 @@ import ai_brain_llm
 import compliance_map
 
 ROOT = Path(__file__).resolve().parent
-FACE_VERSION = "0.3.0-c1"
+FACE_VERSION = "0.7.0-mm1"
+
+
+def _cloud_live_ready() -> bool:
+    """True when live AWS collectors can authenticate (profile sentinel-demo by default)."""
+    try:
+        from ai_cloud_live_aws import aws_live_ready
+
+        return aws_live_ready(os.environ.get("AWS_PROFILE") or "sentinel-demo")
+    except Exception:
+        return False
 
 # Face agent catalog — each Hands pack is one named AI agent + its engines.
 AGENT_CATALOG: list[dict] = [
@@ -207,6 +218,15 @@ def _dashboard_context():
 
     compliance = compliance_map.fleet_compliance(jobs_sorted, _raw_findings_for_job)
 
+    try:
+        import worker_report
+
+        evidence_notes = worker_report.list_evidence(ai_brain_agent.DEFAULT_WORKSPACE, limit=8)
+        ciso_reports = worker_report.list_ciso_reports(ai_brain_agent.DEFAULT_WORKSPACE, limit=5)
+    except Exception:
+        evidence_notes = []
+        ciso_reports = []
+
     return {
         "face_version": FACE_VERSION,
         "brain_version": ai_brain_agent.VERSION,
@@ -232,6 +252,8 @@ def _dashboard_context():
         "fleet_risk_score": compliance.get("fleet_risk_score", 100),
         "fleet_risk_label": compliance.get("fleet_risk_label", "LOW"),
         "fleet_risk_class": compliance.get("fleet_risk_class", "risk-low"),
+        "evidence_notes": evidence_notes,
+        "ciso_reports": ciso_reports,
     }
 
 
@@ -400,6 +422,61 @@ def _load_job_review(job: dict) -> dict:
         job_id=job.get("job_id"),
         role=job.get("role"),
     )
+
+    impact = None
+    try:
+        from predeploy.impact_analysis import load_or_analyze
+        from flask import has_request_context
+
+        refresh = False
+        if has_request_context():
+            refresh = str(request.args.get("refresh_impact") or "") in {"1", "true", "yes"}
+        impact = load_or_analyze(
+            ai_brain_agent.DEFAULT_WORKSPACE,
+            job,
+            findings,
+            refresh=refresh,
+            try_terraform_cli=False,
+        )
+        # Overlay Brain recommendation with pre-deploy readiness (still not authorization).
+        if impact and impact.get("recommendation"):
+            explain = dict(explain)
+            explain["recommendation"] = str(impact.get("recommendation")).replace("RECOMMEND_", "").lower()
+            explain["predeploy_recommendation"] = impact.get("recommendation")
+            explain["deployment_ready"] = impact.get("deployment_ready")
+            explain["blast_radius"] = (impact.get("blast_radius") or {}).get("level")
+            explain["why"] = (
+                f"Pre-deploy: {impact.get('recommendation')} · "
+                f"blast {(impact.get('blast_radius') or {}).get('level')} · "
+                f"finding {impact.get('finding_status')}. "
+                "Manager approval still required — recommendation is not authorization."
+            )
+            explain["confidence"] = impact.get("confidence") or explain.get("confidence")
+    except Exception as impact_exc:
+        impact = {
+            "error": str(impact_exc),
+            "recommendation": "RECOMMEND_REVIEW",
+            "manager_approval_required": True,
+            "report_text": f"Impact analysis unavailable: {impact_exc}",
+        }
+
+    focus_id = None
+    try:
+        from flask import has_request_context
+
+        if has_request_context():
+            focus_id = request.args.get("finding") or None
+    except Exception:
+        focus_id = None
+
+    manager = None
+    try:
+        import manager_mode
+
+        manager = manager_mode.build_manager_view(job, findings, impact, focus_finding_id=focus_id)
+    except Exception as mm_exc:
+        manager = {"error": str(mm_exc), "mode": "manager"}
+
     return {
         "findings": findings,
         "findings_count": len(findings),
@@ -413,6 +490,8 @@ def _load_job_review(job: dict) -> dict:
         "risk_label": risk_label,
         "risk_class": risk_class,
         "compliance": compliance,
+        "impact": impact,
+        "manager": manager,
     }
 
 
@@ -470,6 +549,55 @@ def download_kit(job_id: str):
     )
 
 
+@app.route("/job/<job_id>/impact")
+def download_impact(job_id: str):
+    """Download pre-deployment impact analysis markdown."""
+    md = ai_brain_agent.DEFAULT_WORKSPACE / "impact" / f"{job_id}.md"
+    if not md.is_file():
+        job = _job(job_id)
+        if not job:
+            abort(404)
+        from predeploy.impact_analysis import analyze_job, persist_analysis
+
+        findings: list[dict] = []
+        scan_path = Path(str(job.get("scan_report_path") or ""))
+        if scan_path.is_file():
+            try:
+                report = json.loads(scan_path.read_text(encoding="utf-8-sig"))
+                findings = [f for f in (report.get("findings") or []) if isinstance(f, dict)]
+            except Exception:
+                findings = []
+        doc = analyze_job(job, findings, try_terraform_cli=False)
+        persist_analysis(ai_brain_agent.DEFAULT_WORKSPACE, doc)
+        md = Path((doc.get("paths") or {}).get("markdown") or md)
+    if not md.is_file():
+        abort(404)
+    return send_file(md, as_attachment=True, download_name=md.name)
+
+
+@app.route("/api/job/<job_id>/impact", methods=["GET", "POST"])
+def api_job_impact(job_id: str):
+    job = _job(job_id)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    from predeploy.impact_analysis import analyze_job, load_or_analyze, persist_analysis
+
+    refresh = request.method == "POST" or str(request.args.get("refresh") or "") in {"1", "true"}
+    findings: list[dict] = []
+    scan_path = Path(str(job.get("scan_report_path") or ""))
+    if scan_path.is_file():
+        try:
+            report = json.loads(scan_path.read_text(encoding="utf-8-sig"))
+            findings = [f for f in (report.get("findings") or []) if isinstance(f, dict)]
+        except Exception:
+            findings = []
+    if refresh:
+        doc = analyze_job(job, findings, try_terraform_cli=False)
+        persist_analysis(ai_brain_agent.DEFAULT_WORKSPACE, doc)
+        return jsonify(doc)
+    return jsonify(load_or_analyze(ai_brain_agent.DEFAULT_WORKSPACE, job, findings, refresh=False))
+
+
 @app.route("/api/status")
 def api_status():
     return jsonify(_brain("status"))
@@ -514,17 +642,74 @@ def api_brief():
 @app.route("/api/cycle", methods=["POST"])
 def api_cycle():
     data = request.get_json(silent=True) or {}
-    roles = data.get("roles") or (
-        "security-engineer,devsecops,cloud,ai-security"
-    )
+    live = _cloud_live_ready()
+    # Explicit mock:false from Face → live Cloud. Never silently fall back to mock
+    # when the client asked for live (surface the collect error instead).
+    if "mock" in data:
+        mock = bool(data.get("mock"))
+    else:
+        mock = not live
+    if data.get("roles"):
+        roles = data.get("roles")
+    elif not mock:
+        roles = "cloud"
+    else:
+        roles = "security-engineer,devsecops,cloud,ai-security"
+    # If client requested live but AWS is not ready, fail clearly (do not mock).
+    if not mock and not live and "cloud" in str(roles):
+        return (
+            jsonify(
+                {
+                    "status": "failed",
+                    "error": (
+                        "Live AWS not ready. Check: pip install boto3; "
+                        "aws sts get-caller-identity --profile sentinel-demo"
+                    ),
+                    "live_ready": False,
+                }
+            ),
+            503,
+        )
     result = _brain(
         "cycle",
-        mock=True,
+        mock=mock,
         roles=roles,
         llm=bool(data.get("llm", True)),
         llm_provider=data.get("provider") or "offline",
     )
+    result["live_ready"] = live
+    result["cycle_mock"] = mock
     return jsonify(result)
+
+
+@app.route("/api/ciso-report", methods=["POST", "GET"])
+def api_ciso_report():
+    result = _brain("ciso-report", account="aws-952654481542")
+    return jsonify(result)
+
+
+@app.route("/reports/evidence/<evidence_id>")
+def download_evidence(evidence_id: str):
+    safe = Path(evidence_id).name
+    if not safe.startswith("evidence_"):
+        abort(404)
+    paths = ai_brain_agent._ensure_workspace(ai_brain_agent.DEFAULT_WORKSPACE)
+    md = paths["reports"] / "evidence" / f"{safe}.md"
+    if not md.is_file():
+        abort(404)
+    return send_file(md, as_attachment=True, download_name=md.name)
+
+
+@app.route("/reports/ciso/<report_id>")
+def download_ciso(report_id: str):
+    safe = Path(report_id).name
+    if not safe.startswith("ciso_"):
+        abort(404)
+    paths = ai_brain_agent._ensure_workspace(ai_brain_agent.DEFAULT_WORKSPACE)
+    md = paths["reports"] / "ciso" / f"{safe}.md"
+    if not md.is_file():
+        abort(404)
+    return send_file(md, as_attachment=True, download_name=md.name)
 
 
 @app.route("/api/alerts")

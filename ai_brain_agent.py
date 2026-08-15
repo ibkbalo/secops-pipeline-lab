@@ -23,6 +23,7 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import time
 import uuid
@@ -32,7 +33,7 @@ from typing import Any
 import ai_brain_llm
 
 TOOL_ID = "orchestrate_role_brain"
-VERSION = "0.4.0-w1"
+VERSION = "0.4.2-w3"
 DOMAIN = "command-center"
 SUBDOMAIN = "brain/role-orchestration"
 SENTINEL = "command"
@@ -140,12 +141,15 @@ def _ensure_workspace(workspace: Path) -> dict[str, Path]:
         "briefs": workspace / "briefs",
         "alerts": workspace / "alerts",
         "drafts": workspace / "drafts",
+        "reports": workspace / "reports",
         "index": workspace / "index.json",
         "audit": workspace / "audit.jsonl",
         "watch": workspace / "watch_state.json",
     }
-    for key in ("cycles", "jobs", "scans", "briefs", "alerts", "drafts"):
+    for key in ("cycles", "jobs", "scans", "briefs", "alerts", "drafts", "reports"):
         paths[key].mkdir(exist_ok=True)
+    (paths["reports"] / "evidence").mkdir(exist_ok=True)
+    (paths["reports"] / "ciso").mkdir(exist_ok=True)
     if not paths["index"].is_file():
         _write_json(
             paths["index"],
@@ -202,6 +206,100 @@ def _find_open_job_for_fingerprint(
         if job.get("status") == "pending_approval":
             return job
     return None
+
+
+def _pending_jobs_for_role(paths: dict[str, Path], role_key: str) -> list[dict[str, Any]]:
+    index = _read_json(paths["index"])
+    out: list[dict[str, Any]] = []
+    for jid in index.get("pending_job_ids") or []:
+        jp = paths["jobs"] / f"{jid}.json"
+        if not jp.is_file():
+            continue
+        job = _read_json(jp)
+        if job.get("role") == role_key and job.get("status") == "pending_approval":
+            out.append(job)
+    return out
+
+
+def _supersede_job(
+    paths: dict[str, Path],
+    job: dict[str, Any],
+    *,
+    reason: str,
+    cycle_id: str | None = None,
+    replaced_by: str | None = None,
+) -> None:
+    """Close a pending job as superseded by a newer scan (not manager reject)."""
+    job_id = str(job.get("job_id") or "")
+    if not job_id:
+        return
+    job["status"] = "superseded"
+    job["manager_decision"] = "superseded"
+    job["apply_status"] = "not_executed"
+    job["apply_note"] = reason
+    job["updated_at"] = _now()
+    job["superseded_at"] = _now()
+    if cycle_id:
+        job["superseded_by_cycle_id"] = cycle_id
+    if replaced_by:
+        job["replaced_by_job_id"] = replaced_by
+    _write_json(paths["jobs"] / f"{job_id}.json", job)
+
+    index = _read_json(paths["index"])
+    pending = [x for x in (index.get("pending_job_ids") or []) if x != job_id]
+    index["pending_job_ids"] = pending
+    open_fp = dict(index.get("open_fingerprints") or {})
+    fp_key = f"{job.get('role')}:{job.get('fingerprint')}"
+    if open_fp.get(fp_key) == job_id:
+        open_fp.pop(fp_key, None)
+    # Also drop any stale entries pointing at this job id
+    for k, v in list(open_fp.items()):
+        if v == job_id:
+            open_fp.pop(k, None)
+    index["open_fingerprints"] = open_fp
+    superseded = list(index.get("superseded_job_ids") or [])
+    if job_id not in superseded:
+        superseded.append(job_id)
+    index["superseded_job_ids"] = superseded
+    index["updated_at"] = _now()
+    _write_json(paths["index"], index)
+    _append_audit(
+        paths,
+        {
+            "event": "job_superseded",
+            "job_id": job_id,
+            "role": job.get("role"),
+            "reason": reason,
+            "cycle_id": cycle_id,
+            "replaced_by": replaced_by,
+        },
+    )
+
+
+def _supersede_pending_for_role(
+    paths: dict[str, Path],
+    role_key: str,
+    *,
+    reason: str,
+    cycle_id: str | None = None,
+    keep_job_id: str | None = None,
+    replaced_by: str | None = None,
+) -> list[str]:
+    """Ensure at most one pending job per role (keep_job_id optional)."""
+    closed: list[str] = []
+    for job in _pending_jobs_for_role(paths, role_key):
+        jid = str(job.get("job_id") or "")
+        if keep_job_id and jid == keep_job_id:
+            continue
+        _supersede_job(
+            paths,
+            job,
+            reason=reason,
+            cycle_id=cycle_id,
+            replaced_by=replaced_by,
+        )
+        closed.append(jid)
+    return closed
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -296,9 +394,18 @@ def _run_role_pack(role_key: str, mock: bool, target: str | None) -> dict[str, A
     params: dict[str, Any] = {}
     if mock:
         params["mock"] = True
+    elif role_key == "cloud":
+        # Live AWS inventory via boto3 (profile sentinel-demo by default).
+        if target:
+            params["target"] = target
+        else:
+            params["target"] = "live"
+        params["profile"] = os.environ.get("AWS_PROFILE") or "sentinel-demo"
+        params["region"] = os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
     elif target:
         params["target"] = target
     else:
+        # Other roles still need a target or mock fixture for now.
         params["mock"] = True
     return mod.run(params)
 
@@ -383,8 +490,52 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
     role_results: list[dict[str, Any]] = []
     jobs_created: list[dict[str, Any]] = []
     jobs_deduped: list[dict[str, Any]] = []
+    evidence_notes: list[dict[str, Any]] = []
     errors: list[str] = []
     all_findings_count = 0
+
+    def _emit_evidence_for_role(
+        role_key: str,
+        prior_jobs: list[dict[str, Any]],
+        new_findings: list[dict],
+        *,
+        after_job_id: str | None = None,
+        scan_report: dict | None = None,
+    ) -> None:
+        if not prior_jobs:
+            return
+        try:
+            import worker_report
+        except Exception as exc:
+            errors.append(f"{role_key}: evidence_import:{exc}")
+            return
+        before: list[dict] = []
+        before_job_id = None
+        for pj in prior_jobs:
+            before_job_id = before_job_id or pj.get("job_id")
+            before.extend(worker_report._load_findings(pj.get("scan_report_path")))
+        cleared = worker_report.cleared_findings(before, new_findings)
+        if not cleared:
+            return
+        acc = None
+        mode = None
+        if scan_report:
+            mode = (scan_report.get("execution") or {}).get("mode")
+            acc = (scan_report.get("execution") or {}).get("target")
+            meta = scan_report.get("metadata") or {}
+            acc = meta.get("aws_profile") and f"aws:{acc}" or acc
+        note = worker_report.write_evidence_note(
+            workspace,
+            role=role_key,
+            cleared=cleared,
+            cycle_id=cycle_id,
+            before_job_id=str(before_job_id) if before_job_id else None,
+            after_job_id=after_job_id,
+            account=str(acc) if acc else None,
+            scan_mode=str(mode) if mode else None,
+        )
+        if note:
+            evidence_notes.append(note)
 
     for role_key in roles:
         try:
@@ -422,6 +573,25 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         all_findings_count += int(triage.get("total_findings") or 0)
 
         if not triage.get("manager_action_required"):
+            prior = _pending_jobs_for_role(paths, role_key)
+            _emit_evidence_for_role(
+                role_key,
+                prior,
+                findings_list,
+                scan_report=scan_report,
+            )
+            # Clean (or no actionable findings): close stale pending jobs for this role.
+            closed = _supersede_pending_for_role(
+                paths,
+                role_key,
+                reason=(
+                    "Superseded by newer scan with no manager action required "
+                    "(findings cleared or below triage threshold)."
+                ),
+                cycle_id=cycle_id,
+            )
+            if closed:
+                triage["jobs_superseded"] = closed
             continue
 
         if dedupe:
@@ -430,11 +600,29 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
                 existing["updated_at"] = _now()
                 existing["last_seen_cycle_id"] = cycle_id
                 existing["scan_report_path"] = str(scan_path)
+                existing["summary"] = {
+                    "total_findings": triage["total_findings"],
+                    "severity_counts": triage["severity_counts"],
+                    "risk_score": triage["risk_score"],
+                    "top_findings": triage["top_findings"],
+                }
+                existing["proposal"] = triage["proposal"]
+                existing["remediation_mapped"] = (triage.get("remediation") or {}).get("mapped")
+                existing["remediation_unmapped"] = (triage.get("remediation") or {}).get("unmapped")
                 kit = (triage.get("remediation") or {}).get("kit_path")
                 if kit:
                     existing["kit_path"] = kit
                 existing["dedupe_hits"] = int(existing.get("dedupe_hits") or 0) + 1
                 _write_json(paths["jobs"] / f"{existing['job_id']}.json", existing)
+                # Still only one pending job per role — close any siblings.
+                _supersede_pending_for_role(
+                    paths,
+                    role_key,
+                    reason="Superseded: duplicate pending job for same role; keeping refreshed open job.",
+                    cycle_id=cycle_id,
+                    keep_job_id=existing["job_id"],
+                    replaced_by=existing["job_id"],
+                )
                 jobs_deduped.append(
                     {
                         "job_id": existing["job_id"],
@@ -446,7 +634,26 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
                 triage["job_deduped"] = existing["job_id"]
                 continue
 
+        # Findings changed → evidence for clears, then replace prior pending job(s).
+        prior = _pending_jobs_for_role(paths, role_key)
+        closed = _supersede_pending_for_role(
+            paths,
+            role_key,
+            reason=(
+                "Superseded by newer live/mock scan with an updated finding set. "
+                "Open the newest job for current evidence."
+            ),
+            cycle_id=cycle_id,
+        )
+
         job_id = _new_id("job")
+        _emit_evidence_for_role(
+            role_key,
+            prior,
+            findings_list,
+            after_job_id=job_id,
+            scan_report=scan_report,
+        )
         job = {
             "job_id": job_id,
             "cycle_id": cycle_id,
@@ -459,6 +666,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
             "title": ROLE_WORKERS[role_key]["title"],
             "fingerprint": fingerprint,
             "dedupe_hits": 0,
+            "supersedes_job_ids": closed,
             "summary": {
                 "total_findings": triage["total_findings"],
                 "severity_counts": triage["severity_counts"],
@@ -474,9 +682,18 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
             "manager_note": None,
             "license": LICENSE_HOOK,
         }
+        # Link superseded jobs to the replacement id now that we know it.
+        for old_id in closed:
+            op = paths["jobs"] / f"{old_id}.json"
+            if op.is_file():
+                old = _read_json(op)
+                old["replaced_by_job_id"] = job_id
+                _write_json(op, old)
         _write_json(paths["jobs"] / f"{job_id}.json", job)
         jobs_created.append(job)
         triage["job_created"] = job_id
+        if closed:
+            triage["jobs_superseded"] = closed
 
     index = _read_json(paths["index"])
     pending = list(index.get("pending_job_ids") or [])
@@ -488,6 +705,9 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         open_fp[fp_key] = job["job_id"]
     index["pending_job_ids"] = pending
     index["open_fingerprints"] = open_fp
+    if evidence_notes:
+        index["last_evidence_id"] = evidence_notes[-1].get("evidence_id")
+        index["evidence_count"] = int(index.get("evidence_count") or 0) + len(evidence_notes)
     index["last_cycle_id"] = cycle_id
     index["updated_at"] = _now()
     index["license"] = LICENSE_HOOK
@@ -504,6 +724,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
             "findings": all_findings_count,
             "jobs_created": [j["job_id"] for j in jobs_created],
             "jobs_deduped": jobs_deduped,
+            "evidence_notes": [e.get("evidence_id") for e in evidence_notes],
             "errors": errors,
         },
     )
@@ -533,6 +754,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         "role_results": role_results,
         "jobs_created": [j["job_id"] for j in jobs_created],
         "jobs_deduped": jobs_deduped,
+        "evidence_notes": [e.get("evidence_id") for e in evidence_notes],
         "errors": errors,
         "alerts_emitted": len(alerts_emitted),
         "totals": {
@@ -541,6 +763,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
             "jobs_deduped": len(jobs_deduped),
             "findings": all_findings_count,
             "alerts": len(alerts_emitted),
+            "evidence_notes": len(evidence_notes),
         },
         "license": LICENSE_HOOK,
     }
@@ -572,6 +795,30 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         cycle_doc["llm_brief_id"] = (llm_brief or {}).get("brief_id")
         _write_json(paths["cycles"] / f"{cycle_id}.json", cycle_doc)
 
+    ciso_report = None
+    try:
+        import worker_report
+
+        pending_for_ciso: list[dict[str, Any]] = []
+        idx_ciso = _read_json(paths["index"])
+        for jid in idx_ciso.get("pending_job_ids") or []:
+            jp = paths["jobs"] / f"{jid}.json"
+            if jp.is_file():
+                pending_for_ciso.append(_read_json(jp))
+        ciso_report = worker_report.maybe_auto_ciso_on_milestone(
+            workspace,
+            pending_for_ciso,
+            account="aws-live" if not mock else "lab-mock",
+        )
+        if ciso_report:
+            idx_ciso["last_ciso_report_id"] = ciso_report.get("report_id")
+            idx_ciso["updated_at"] = _now()
+            _write_json(paths["index"], idx_ciso)
+            cycle_doc["ciso_report_id"] = ciso_report.get("report_id")
+            _write_json(paths["cycles"] / f"{cycle_id}.json", cycle_doc)
+    except Exception as ciso_exc:
+        errors.append(f"ciso_report:{ciso_exc}")
+
     report = _brain_report(
         action="cycle",
         status=status,
@@ -584,6 +831,14 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
     )
     if llm_brief:
         report["metadata"]["llm_brief"] = llm_brief
+    if evidence_notes:
+        report["metadata"]["evidence_notes"] = evidence_notes
+    if ciso_report:
+        report["metadata"]["ciso_report"] = {
+            "report_id": ciso_report.get("report_id"),
+            "paths": ciso_report.get("paths"),
+            "milestone_critical_high_clear": ciso_report.get("milestone_critical_high_clear"),
+        }
     return report
 
 
@@ -777,33 +1032,106 @@ def decide_job(params: dict[str, Any], decision: str) -> dict[str, Any]:
             jobs=[job],
         )
 
-    if decision == "approve":
-        job["status"] = "approved"
-        job["manager_decision"] = "approved"
-        # Apply is intentionally NOT implemented — draft bundle only (dry-run).
-        job["apply_status"] = "not_executed"
-        job["apply_note"] = (
-            "Manager approved the proposed kit. Draft fix bundle may be written under "
-            "brain_workspace/drafts/ (dry-run). Cloud/repo apply remains forbidden."
-        )
-        try:
-            import worker_draft
+    # Load change-assurance report for cryptographic approval binding (no execution).
+    assurance_report = None
+    ca_approval = None
+    try:
+        from change_assurance.engine import load_or_assure
+        from change_assurance import approval_integrity as ca_approval  # noqa: F811
 
-            draft = worker_draft.create_draft_bundle(workspace, job, enabled=True)
-            job["draft_dir"] = draft.get("draft_dir")
-            job["draft_meta"] = draft.get("meta")
-            if draft.get("ok"):
-                job["apply_note"] = (
-                    f"Approved. Dry-run draft bundle at {draft.get('draft_dir')}. "
-                    "No production apply. Open a human PR from DRAFT_PR.md when ready."
+        findings_for_ca: list[dict] = []
+        scan_path = Path(str(job.get("scan_report_path") or ""))
+        if scan_path.is_file():
+            try:
+                scan_doc = _read_json(scan_path)
+                findings_for_ca = [f for f in (scan_doc.get("findings") or []) if isinstance(f, dict)]
+            except Exception:
+                findings_for_ca = []
+        assurance_report = load_or_assure(workspace, job, findings_for_ca, refresh=False)
+    except Exception as ca_exc:
+        ca_approval = None
+        job["assurance_bind_error"] = str(ca_exc)
+
+    finding_decisions = params.get("finding_decisions") or {}
+    if isinstance(finding_decisions, str):
+        finding_decisions = {}
+    # Default: map job-level decision onto primary finding when none provided
+    if decision == "approve" and assurance_report and not finding_decisions:
+        primary = assurance_report.get("primary_finding_id")
+        focus = assurance_report.get("focus_finding_ids") or ([primary] if primary else [])
+        finding_decisions = {str(fid): "approved" for fid in focus if fid}
+
+    if decision == "approve":
+        # Per-finding: job is not fully approved if any finding rejected/deferred
+        fully = True
+        if finding_decisions and assurance_report:
+            try:
+                from change_assurance.approval_integrity import job_fully_approved
+
+                fully = job_fully_approved(
+                    finding_decisions,
+                    assurance_report.get("focus_finding_ids")
+                    or [assurance_report.get("primary_finding_id")],
                 )
-        except Exception as draft_exc:
-            job["draft_error"] = str(draft_exc)
+            except Exception:
+                fully = True
+        if not fully:
+            job["status"] = "partially_approved"
+            job["manager_decision"] = "partial"
+            job["apply_status"] = "not_executed"
+            job["apply_note"] = (
+                "Per-finding decisions recorded. Job is NOT fully approved — "
+                "no execution authorization for the whole job."
+            )
+        else:
+            job["status"] = "approved"
+            job["manager_decision"] = "approved"
+            job["approval_status"] = "APPROVED_FOR_EXECUTION"
+            # Apply is intentionally NOT implemented — draft bundle only (dry-run).
+            job["apply_status"] = "not_executed"
+            job["apply_note"] = (
+                "Manager approved the exact reviewed change (APPROVED_FOR_EXECUTION). "
+                "Draft fix bundle may be written under brain_workspace/drafts/ (dry-run). "
+                "Cloud/repo apply remains forbidden. Authorization is bound to approval hashes."
+            )
+            try:
+                import worker_draft
+
+                draft = worker_draft.create_draft_bundle(workspace, job, enabled=True)
+                job["draft_dir"] = draft.get("draft_dir")
+                job["draft_meta"] = draft.get("meta")
+                if draft.get("ok"):
+                    job["apply_note"] = (
+                        f"APPROVED_FOR_EXECUTION. Dry-run draft at {draft.get('draft_dir')}. "
+                        "No production apply. Binding sealed to artifact/change hashes."
+                    )
+            except Exception as draft_exc:
+                job["draft_error"] = str(draft_exc)
     else:
         job["status"] = "rejected"
         job["manager_decision"] = "rejected"
         job["apply_status"] = "blocked"
         job["apply_note"] = "Manager rejected this proposal. No changes will be applied."
+
+    # Seal approval binding to exact reviewed change (never executes).
+    if ca_approval and assurance_report:
+        try:
+            binding = ca_approval.seal_manager_approval(
+                job=job,
+                assurance_report=assurance_report,
+                decision=decision,
+                finding_decisions=finding_decisions,
+            )
+            path = ca_approval.persist_binding(workspace, job_id, binding)
+            job["approval_binding"] = binding
+            job["approval_binding_path"] = str(path)
+            job["finding_decisions"] = finding_decisions
+            job["execution_authorized"] = bool(binding.get("execution_authorized")) and job.get(
+                "status"
+            ) == "approved"
+            job["execution_performed"] = False
+        except Exception as bind_exc:
+            job["approval_binding_error"] = str(bind_exc)
 
     job["manager_note"] = params.get("note")
     job["updated_at"] = _now()
@@ -819,12 +1147,12 @@ def decide_job(params: dict[str, Any], decision: str) -> dict[str, Any]:
     if open_fp.get(fp_key) == job_id:
         open_fp.pop(fp_key, None)
     index["open_fingerprints"] = open_fp
-    if decision == "approve":
+    if decision == "approve" and job.get("status") == "approved":
         approved = list(index.get("approved_job_ids") or [])
         if job_id not in approved:
             approved.append(job_id)
         index["approved_job_ids"] = approved
-    else:
+    elif decision != "approve":
         rejected = list(index.get("rejected_job_ids") or [])
         if job_id not in rejected:
             rejected.append(job_id)
@@ -843,6 +1171,11 @@ def decide_job(params: dict[str, Any], decision: str) -> dict[str, Any]:
             "kit_path": job.get("kit_path"),
             "findings": (job.get("summary") or {}).get("total_findings"),
             "apply_status": job.get("apply_status"),
+            "approval_status": job.get("approval_status"),
+            "execution_authorized": job.get("execution_authorized"),
+            "execution_performed": False,
+            "artifact_hash": (job.get("approval_binding") or {}).get("artifact_hash"),
+            "change_hash": (job.get("approval_binding") or {}).get("change_hash"),
         },
     )
 
@@ -902,6 +1235,56 @@ def show_job(params: dict[str, Any]) -> dict[str, Any]:
         started=started,
         jobs=[_read_json(jp)],
     )
+
+
+def generate_ciso_report(params: dict[str, Any]) -> dict[str, Any]:
+    """On-demand official CISO posture report (markdown + json under reports/ciso/)."""
+    started = datetime.datetime.now(datetime.timezone.utc)
+    workspace = Path(str(params.get("workspace") or DEFAULT_WORKSPACE)).expanduser()
+    if not workspace.is_absolute():
+        workspace = ROOT / workspace
+    paths = _ensure_workspace(workspace)
+    import worker_report
+
+    pending_jobs: list[dict[str, Any]] = []
+    index = _read_json(paths["index"])
+    for jid in index.get("pending_job_ids") or []:
+        jp = paths["jobs"] / f"{jid}.json"
+        if jp.is_file():
+            pending_jobs.append(_read_json(jp))
+    doc = worker_report.write_ciso_report(
+        workspace,
+        pending_jobs=pending_jobs,
+        account=params.get("account") or "aws-live",
+        title=params.get("title"),
+    )
+    index["last_ciso_report_id"] = doc.get("report_id")
+    index["updated_at"] = _now()
+    _write_json(paths["index"], index)
+    _append_audit(
+        paths,
+        {
+            "event": "ciso_report_generated",
+            "report_id": doc.get("report_id"),
+            "milestone": doc.get("milestone_critical_high_clear"),
+        },
+    )
+    report = _brain_report(
+        action="ciso-report",
+        status="success",
+        workspace=workspace,
+        started=started,
+        index=index,
+        jobs=pending_jobs,
+    )
+    report["metadata"]["ciso_report"] = doc
+    report["metadata"]["llm_summary"] = (
+        f"CISO report {doc.get('report_id')} written. "
+        f"Open={doc.get('open', {}).get('total')} findings "
+        f"(C:{doc.get('open', {}).get('critical')} H:{doc.get('open', {}).get('high')}). "
+        f"Markdown: {(doc.get('paths') or {}).get('markdown')}"
+    )
+    return report
 
 
 def list_audit(params: dict[str, Any]) -> dict[str, Any]:
@@ -1225,12 +1608,14 @@ def run(params: dict | None = None) -> dict[str, Any]:
         return show_job(params)
     if action == "audit":
         return list_audit(params)
+    if action in {"ciso-report", "ciso_report", "report"}:
+        return generate_ciso_report(params)
     return _brain_report(
         action=action,
         status="failed",
         error=(
             f"unknown action '{action}'. "
-            "use: cycle|watch|pending|brief|reason|approve|reject|status|show|audit"
+            "use: cycle|watch|pending|brief|reason|approve|reject|status|show|audit|ciso-report"
         ),
         workspace=Path(str(params.get("workspace") or DEFAULT_WORKSPACE)),
         started=datetime.datetime.now(datetime.timezone.utc),

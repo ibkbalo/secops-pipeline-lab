@@ -13,6 +13,7 @@
     </div>
     <div class="top-actions">
       <button class="btn btn-ghost" id="btn-brief" type="button">Refresh brief</button>
+      <button class="btn btn-ghost" id="btn-ciso" type="button">CISO report</button>
       <button class="btn btn-primary" id="btn-cycle" type="button">Run AI cycle</button>
       <a class="btn btn-signal" href="/">Reload</a>
     </div>
@@ -23,7 +24,8 @@
     <ol>
       <li><strong>Scroll down</strong> to the 4 AI agents (Security Engineer, DevSecOps, Cloud, AI Security).</li>
       <li>Inside each agent, open a <strong>job</strong> → review the kit → click <strong>Approve</strong> or <strong>Reject</strong>.</li>
-      <li><strong>Findings</strong> numbers come from those agent scan jobs (lab mock = intentionally vulnerable demo data).</li>
+      <li><strong>Findings</strong> come from the latest agent scan. Re-running a cycle replaces the previous open job for that agent (old jobs are marked superseded).</li>
+      <li><strong>Fix evidence</strong> is written automatically when a re-scan clears findings. Use <strong>CISO report</strong> for an official posture pack anytime (auto-milestone when critical/high are gone).</li>
       <li><strong>Brain brief</strong> (right side) is the summary report — not where you approve.</li>
     </ol>
   </section>
@@ -208,7 +210,7 @@
         </div>
         <div class="panel-body explain">
           <p><strong>Not a mystery feed.</strong> Each number above is the sum of findings inside the <em>pending jobs</em> from your 4 agents.</p>
-          <p>In lab mode those jobs were created by mock vulnerable scans (intentionally broken demo company).</p>
+          <p>Cloud jobs come from a live read-only scan of your AWS account (profile <span class="mono">sentinel-demo</span>).</p>
           <p><strong>Report</strong> = Brain brief on the right (executive + CEO summary).</p>
           <p><strong>See findings + fixes</strong> = click <em>Review findings</em> → Brain explains the issues, then <em>Download kit ZIP</em>.</p>
         </div>
@@ -283,6 +285,45 @@
           <strong>No brief yet</strong>
           Click “Refresh brief”.
         </div>
+        {% endif %}
+      </section>
+
+      <section class="panel brief-panel">
+        <div class="panel-head">
+          <div>
+            <h2>CISO / fix evidence</h2>
+            <p>Per-fix notes + official posture reports</p>
+          </div>
+        </div>
+        {% if evidence_notes %}
+        <div class="brief-section">
+          <h3>Recent fix evidence</h3>
+          <ul class="backlog-list">
+            {% for e in evidence_notes %}
+            <li>
+              <a href="{{ url_for('download_evidence', evidence_id=e.evidence_id) }}">{{ e.evidence_id }}</a>
+              <span class="muted-note">{{ e.cleared_count }} cleared · {{ e.created_at }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% else %}
+        <p class="muted-note">No fix evidence yet — appears after a re-scan clears findings.</p>
+        {% endif %}
+        {% if ciso_reports %}
+        <div class="brief-section">
+          <h3>CISO reports</h3>
+          <ul class="backlog-list">
+            {% for r in ciso_reports %}
+            <li>
+              <a href="{{ url_for('download_ciso', report_id=r.report_id) }}">{{ r.report_id }}</a>
+              <span class="muted-note">{% if r.milestone_critical_high_clear %}milestone · {% endif %}{{ r.created_at }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% else %}
+        <p class="muted-note">No CISO report yet — click “CISO report” above.</p>
         {% endif %}
       </section>
     </aside>

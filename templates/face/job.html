@@ -6,193 +6,351 @@
 {% set review = review if review is defined else {} %}
 {% set explain = review.explain or {} %}
 {% set findings = review.findings or [] %}
-<main class="detail-wrap">
+{% set impact = review.impact or {} %}
+{% set ca = impact.change_assurance or impact.change_assurance_report or {} %}
+{% set art0 = (ca.artifacts or [{}])[0] if ca.artifacts else {} %}
+{% set integ = ca.approval_integrity or impact.approval_integrity or {} %}
+{% set repo = ca.repo_fingerprint or impact.repo_fingerprint or {} %}
+{% set mm = review.manager or {} %}
+{% set primary = mm.primary or {} %}
+{% set summ = mm.summary or {} %}
+{% set affect = primary.affect or {} %}
+{% set learn = primary.learning or {} %}
+{% set appr = primary.approval_integrity or mm.approval_integrity or {} %}
+<main class="detail-wrap manager-mode">
   <a class="btn btn-ghost" href="{{ url_for('dashboard') }}" style="margin-bottom:16px;display:inline-flex;">Back to agents</a>
 
   <article class="detail-card">
-    <div class="eyebrow">{{ job.role }} · {{ job.status }} · Brain explains → you decide</div>
+    <div class="eyebrow">Manager Mode · {{ mm.agent or job.role }} · you decide — nothing auto-applies</div>
     <h1>{{ job.title }}</h1>
-    <div class="mono">{{ job.job_id }}</div>
+    <div class="mono muted-note">{{ job.job_id }}</div>
 
-    <div class="job-stats" style="margin-top:16px;">
-      <span class="chip {{ review.risk_class or 'risk-med' }}">Risk {{ review.risk_score if review.risk_score is not none else '—' }} · {{ review.risk_label or '' }}</span>
-      <span class="chip">{{ review.findings_count or 0 }} findings</span>
-      <span class="chip chip-crit">{{ c.critical or 0 }} critical</span>
-      <span class="chip chip-high">{{ c.high or 0 }} high</span>
-      {% if job.remediation_mapped is not none %}
-      <span class="chip chip-ok">{{ job.remediation_mapped }} mapped in kit</span>
-      {% endif %}
+    {# —— Job summary (honest counts only) —— #}
+    <section class="mm-summary" aria-label="Job summary">
+      <div class="mm-summary-grid">
+        <div><strong>{{ summ.total if summ.total is defined else review.findings_count or 0 }}</strong><span>findings</span></div>
+        <div><strong class="sev-text-critical">{{ summ.critical if summ.critical is defined else c.critical or 0 }}</strong><span>critical</span></div>
+        <div><strong class="sev-text-high">{{ summ.high if summ.high is defined else c.high or 0 }}</strong><span>high</span></div>
+        <div><strong>{{ summ.medium if summ.medium is defined else c.medium or 0 }}</strong><span>medium</span></div>
+        <div><strong>{{ summ.low if summ.low is defined else c.low or 0 }}</strong><span>low</span></div>
+      </div>
+      <div class="mm-summary-meta">
+        {% if summ.needs_your_decision %}<span class="chip chip-amber">Needs your decision: {{ summ.needs_your_decision }}</span>{% endif %}
+        {% if summ.already_fixed %}<span class="chip chip-ok">Already fixed: {{ summ.already_fixed }}</span>{% endif %}
+        {% if summ.safe_to_review is defined %}<span class="chip">Safe to review: {{ summ.safe_to_review }}</span>{% endif %}
+        {% if summ.needs_more_investigation is defined %}<span class="chip">Needs more investigation: {{ summ.needs_more_investigation }}</span>{% endif %}
+      </div>
+    </section>
+
+    {% if appr.needs_review %}
+    <div class="mm-alert mm-alert-warn" role="alert">
+      <strong>{{ appr.headline or "APPROVAL NEEDS REVIEW" }}</strong>
+      <p>{{ appr.message }}</p>
     </div>
+    {% endif %}
 
-    {# —— Compliance rollup for this job —— #}
-    {% set comp = review.compliance or {} %}
-    <section class="brief-section compliance-job" style="margin-top:18px;">
-      <h3>Compliance (this job)</h3>
-      <p style="color:var(--muted);margin:6px 0 12px;font-size:0.9rem;">
-        {{ comp.findings_with_compliance or 0 }} / {{ comp.findings_total or 0 }} findings tagged ·
-        frameworks: {{ (comp.frameworks_hit or [])|join(', ') or 'none' }}
-      </p>
-      <div class="compliance-grid compliance-grid-sm">
-        {% for fw in comp.frameworks or [] %}
-        {% if fw.finding_count %}
-        <article class="compliance-card">
-          <div class="compliance-card-head">
-            <strong>{{ fw.framework }}</strong>
-            <span class="chip">{{ fw.control_count }} controls</span>
+    {% if primary.already_remediated %}
+    <div class="mm-alert mm-alert-ok" role="status">
+      <strong>ALREADY FIXED</strong>
+      <p>Live checks suggest this control may already be remediated. No change should be applied unless you verify otherwise.</p>
+    </div>
+    {% endif %}
+
+    {# —— Primary Manager Card (six questions) —— #}
+    {% if primary and not mm.error %}
+    <section class="mm-card sev-{{ (primary.severity or 'info')|lower }}" id="manager-card">
+      <div class="mm-card-banner">{{ primary.banner or "SECURITY ISSUE" }}</div>
+      <h2 class="mm-card-title">{{ primary.plain_title or job.title }}</h2>
+      <p class="mm-agent">Agent: <strong>{{ primary.agent or mm.agent }}</strong></p>
+      {% if primary.cross_agent %}
+      <ul class="mm-cross">
+        {% for line in primary.cross_agent %}
+        <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      <div class="mm-q">
+        <h3>What did the AI find?</h3>
+        <p>{{ primary.what_found }}</p>
+        {% if primary.finding_id %}<p class="mm-secondary mono">Control ID: {{ primary.finding_id }}</p>{% endif %}
+      </div>
+
+      <div class="mm-q">
+        <h3>Why does it matter?</h3>
+        <p>{{ primary.why_matters }}</p>
+      </div>
+
+      <div class="mm-q">
+        <h3>What does the AI want to change?</h3>
+        <p>{{ primary.what_change }}</p>
+      </div>
+
+      <div class="mm-q">
+        <h3>What could this affect or break?</h3>
+        <p>{{ affect.summary_line or primary.what_change }}</p>
+        <ul class="mm-affect-list">
+          <li><span>Scope</span> {{ affect.scope or "—" }}</li>
+          <li><span>Potentially affected systems</span> {{ affect.potentially_affected or "—" }}</li>
+          <li><span>Expected downtime</span> {{ affect.expected_downtime or "—" }}</li>
+          <li><span>Known dependencies</span> {{ (affect.known_dependencies or [])|join(', ') or "—" }}</li>
+          <li><span>Unknowns</span> {{ (affect.unknowns or [])|join('; ') or "—" }}</li>
+        </ul>
+      </div>
+
+      <div class="mm-q">
+        <h3>Why is the AI recommending this decision?</h3>
+        <p>{{ primary.why_recommend }}</p>
+      </div>
+
+      <div class="mm-q">
+        <h3>How will we prove the fix worked?</h3>
+        <p>{{ primary.after_change }}</p>
+      </div>
+
+      {% if primary.manager_input_needed and primary.manager_questions %}
+      <div class="mm-context">
+        <div class="mm-context-label">MANAGER INPUT NEEDED</div>
+        <p>The AI cannot make this decision alone without business context.</p>
+        {% for q in primary.manager_questions[:4] %}
+        <p class="mm-context-q"><strong>Question:</strong> {{ q }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if primary.ai_checks %}
+      <div class="mm-checks">
+        <div class="engine-label">AI checks</div>
+        <ul>
+          {% for chk in primary.ai_checks %}
+          <li class="{% if chk.ok %}ok{% else %}warn{% endif %}">{% if chk.ok %}✓{% else %}•{% endif %} {{ chk.label }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
+      <div class="mm-decision-row">
+        <div class="mm-metric">
+          <span class="mm-metric-label">Security Severity</span>
+          <span class="mm-metric-value sev-text-{{ (primary.security_severity or 'info')|lower }}">{{ primary.security_severity or "—" }}</span>
+        </div>
+        <div class="mm-metric">
+          <span class="mm-metric-label">Risk of Applying Fix</span>
+          <span class="mm-metric-value risk-{{ (primary.change_risk or 'unknown')|lower }}">{{ primary.change_risk or "—" }}</span>
+        </div>
+        <div class="mm-metric">
+          <span class="mm-metric-label">AI Recommendation</span>
+          <span class="mm-metric-value">{{ primary.recommendation_label or "REVIEW WITH MANAGER" }}</span>
+        </div>
+        <div class="mm-metric">
+          <span class="mm-metric-label">Manager Decision</span>
+          <span class="mm-metric-value">{{ primary.manager_decision or mm.manager_decision or "PENDING" }}</span>
+        </div>
+        <div class="mm-metric">
+          <span class="mm-metric-label">Execution</span>
+          <span class="mm-metric-value">{{ primary.execution or "NOT PERFORMED" }}</span>
+        </div>
+      </div>
+
+      <p class="mm-why-short"><strong>Why?</strong> {{ primary.why_recommend }}</p>
+      <p class="mm-after-short"><strong>After the change</strong> {{ primary.after_change }}</p>
+
+      <details class="mm-learn">
+        <summary>Explain this to me</summary>
+        <div class="mm-learn-body">
+          <p><strong>What is this technology/service?</strong><br>{{ learn.technology or "See finding description." }}</p>
+          <p><strong>What security concept am I learning?</strong><br>{{ learn.concept or "Risk reduction control." }}</p>
+          <p><strong>What you are learning</strong><br>{{ learn.learning or "" }}</p>
+          <p><strong>Why would this engineer care?</strong><br>{{ learn.why_engineer or "" }}</p>
+          <p><strong>What should I understand before approving?</strong><br>{{ learn.before_approve or "" }}</p>
+        </div>
+      </details>
+
+      {% if job.status == "pending_approval" %}
+      <div class="detail-actions mm-actions">
+        <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject</button>
+        <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve</button>
+      </div>
+      <p class="mm-approve-note">Approve authorizes <em>this exact reviewed change</em> only. It does <strong>not</strong> deploy or apply anything.</p>
+      {% else %}
+      <div class="detail-actions mm-actions">
+        <span class="chip">Manager Decision: {{ primary.manager_decision }}</span>
+        <span class="chip">Execution: {{ primary.execution }}</span>
+        {% if appr.headline %}<span class="chip">{{ appr.headline }}</span>{% endif %}
+      </div>
+      {% endif %}
+    </section>
+    {% elif mm.error %}
+    <p class="mono" style="color:var(--red);">Manager Mode unavailable: {{ mm.error }}</p>
+    {% endif %}
+
+    {# —— Finding list (simple rows) —— #}
+    {% if mm.finding_rows and mm.finding_rows|length > 1 %}
+    <section class="mm-finding-list">
+      <h3>Other findings in this job</h3>
+      <p class="muted-note">Open one at a time. Technical detail stays under Advanced Technical Details.</p>
+      <div class="mm-rows">
+        {% for row in mm.finding_rows %}
+        {% if not row.is_primary %}
+        <a class="mm-row sev-{{ (row.severity or 'info')|lower }}" href="{{ url_for('job_detail', job_id=job.job_id, finding=row.finding_id) }}#manager-card">
+          <span class="sev">{{ row.severity }}</span>
+          <div class="mm-row-body">
+            <strong>{{ row.plain_title }}</strong>
+            <div class="mm-row-meta">
+              {{ row.agent }} · Security Risk: {{ row.security_severity }} · Change Risk: {{ row.change_risk }}
+              · AI: {{ row.recommendation_label }}
+            </div>
           </div>
-          <ul class="control-list">
-            {% for ctrl in fw.controls[:8] %}
-            <li>
-              <span class="mono">{{ ctrl.control }}</span>
-              <span class="muted-note">→ {{ ctrl.finding_ids[:4]|join(', ') }}</span>
-            </li>
-            {% endfor %}
-          </ul>
-        </article>
+          <span class="mm-row-cta">Review</span>
+        </a>
         {% endif %}
         {% endfor %}
       </div>
     </section>
-
-    {# —— Brain instant explanation —— #}
-    <section class="brain-explain">
-      <div class="brain-explain-head">
-        <span class="chip chip-ok">BRAIN</span>
-        <span class="chip">{{ explain.provider or "offline" }} · {{ explain.model or "heuristic-v1" }}</span>
-        <span class="chip">{{ explain.confidence or "medium" }} confidence</span>
-        <span class="chip">recommend: {{ explain.recommendation or "investigate" }}</span>
-      </div>
-      <h2>What Brain found — and how to fix it</h2>
-      <p class="brain-headline">{{ explain.headline or "Loading explanation…" }}</p>
-      <p class="brain-why">{{ explain.why or "" }}</p>
-
-      {% if explain.issue_fixes %}
-      <div class="issue-fix-list">
-        {% for item in explain.issue_fixes %}
-        <article class="issue-fix-card sev-{{ item.severity or 'info' }}">
-          <div class="finding-top">
-            <span class="sev">{{ item.severity }}</span>
-            <span class="mono">{{ item.id }}</span>
-          </div>
-          <h4>Issue: {{ item.issue }}</h4>
-          <p class="finding-desc">{{ item.why }}</p>
-          {% if item.compliance %}
-          <div class="compliance-tags">
-            {% for tag in item.compliance %}
-            <span class="chip chip-compliance">{{ tag }}</span>
-            {% endfor %}
-          </div>
-          {% endif %}
-          <div class="fix-box">
-            <div class="engine-label">How to fix</div>
-            <p>{{ item.how_to_fix }}</p>
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </section>
-
-    {# —— Kit download —— #}
-    <section class="brief-section kit-download-block" style="margin-top:20px;">
-      <h3>Hardening kit (download ZIP)</h3>
-      <p style="color:var(--muted);margin:8px 0 12px;font-size:0.92rem;">
-        Download → unzip → open <span class="mono">runbooks/</span> and <span class="mono">configs/</span> → work the fixes → then Approve or Reject here.
-      </p>
-      {% if review.kit_exists %}
-      <a class="btn btn-signal" href="{{ url_for('download_kit', job_id=job.job_id) }}">
-        Download kit ZIP — {{ review.kit_name }}
-      </a>
-      <p class="mono" style="margin-top:10px;color:#94a3b8;">Saved as: {{ review.kit_path }}</p>
-      {% else %}
-      <p class="mono" style="color:var(--red);">Kit file not found on disk: {{ review.kit_path or "none" }}</p>
-      {% endif %}
-
-      {% if review.kit_files %}
-      <p style="color:var(--muted);margin:14px 0 8px;font-size:0.9rem;">Inside the ZIP:</p>
-      <ul class="kit-files">
-        {% for f in review.kit_files %}
-        <li class="mono">{{ f }}</li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-    </section>
-
-    {% if job.status == "pending_approval" %}
-    <div class="detail-actions">
-      <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve plan</button>
-      <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject plan</button>
-    </div>
-    <p class="mono" style="margin-top:-8px;">Approve = accept the plan. It does <strong>not</strong> auto-apply to production.</p>
-    {% else %}
-    <div class="detail-actions">
-      <span class="chip">Decision: {{ job.manager_decision or job.status }}</span>
-    </div>
     {% endif %}
 
-    <div class="brief-section" style="margin-top:18px;">
-      <h3>Agent proposal</h3>
-      <div class="proposal">{{ job.proposal or "No proposal text." }}</div>
-    </div>
+    {# —— Advanced Technical Details (collapsed) —— #}
+    <details class="mm-advanced">
+      <summary>Advanced Technical Details</summary>
+      <div class="mm-advanced-body">
+        <p class="muted-note">For engineers and auditors. Not required for the manager decision.</p>
 
-    <div class="brief-section findings-block" style="margin-top:22px;">
-      <h3>Full findings list ({{ review.findings_count or 0 }})</h3>
-      <p style="color:var(--muted);margin:6px 0 12px;font-size:0.9rem;">
-        Every issue from this agent’s scan, with detailed fix steps.
-      </p>
-
-      {% if findings %}
-      <div class="finding-list">
-        {% for f in findings %}
-        <article class="finding-card sev-{{ f.severity or 'info' }}">
-          <div class="finding-top">
-            <span class="sev">{{ f.severity or "info" }}</span>
-            <span class="mono">{{ f.id }}</span>
-          </div>
-          <h4>{{ f.title }}</h4>
-          <p class="finding-desc">{{ f.description }}</p>
-          {% if f.compliance %}
-          <div class="compliance-tags">
-            {% for tag in f.compliance %}
-            <span class="chip chip-compliance">{{ tag }}</span>
-            {% endfor %}
-          </div>
+        <div class="job-stats" style="margin-bottom:12px;">
+          <span class="chip">Domain: {{ ca.domain or job.role or "—" }}</span>
+          <span class="chip">Raw recommendation: {{ impact.recommendation or ca.recommendation or "—" }}</span>
+          <span class="chip">Finding status: {{ impact.finding_status or "—" }}</span>
+          <span class="chip">Validation: {{ ca.validation_status or ((impact.terraform or {}).validate or {}).status or "—" }}</span>
+          {% if ca.validation_mode or impact.validation_mode %}
+          <span class="chip">Validation mode: {{ ca.validation_mode or impact.validation_mode }}</span>
           {% endif %}
-          {% set steps = (f.remediation or {}).steps or [] %}
-          <div class="fix-box">
-            <div class="engine-label">Proposed solution steps</div>
+          <span class="chip">Blast: {{ (impact.blast_radius or {}).level or "—" }}</span>
+          <span class="chip">Remediation risk: {{ ((ca.remediation_risk or impact.remediation_risk) or {}).level or "—" }}</span>
+          <span class="chip">Integrity: {{ integ.integrity or appr.status or "—" }}</span>
+        </div>
+
+        {% if appr.technical_reasons %}
+        <p class="mono">Integrity reason codes: {{ appr.technical_reasons|join(', ') }}</p>
+        {% elif integ.reason %}
+        <p class="mono">Integrity reason: {{ integ.reason }}</p>
+        {% endif %}
+
+        {% if ca.domain == "devsecops" or job.role == "devsecops" %}
+        <h4>Repository</h4>
+        <ul class="kit-files">
+          <li class="mono">path: {{ repo.repository or "—" }}</li>
+          <li class="mono">branch: {{ repo.branch or "—" }}</li>
+          <li class="mono">commit: {{ repo.commit_sha or "—" }}</li>
+        </ul>
+        {% endif %}
+
+        {% set tf = impact.terraform or {} %}
+        {% set plan = tf.plan or {} %}
+        {% set tsumm = plan.summary or {} %}
+        <h4>Assurance / plan summary</h4>
+        <p class="mono">
+          Artifact: {{ art0.artifact_type or "—" }} ·
+          Create +{{ tsumm.create or 0 }} · Modify ~{{ tsumm.modify or 0 }} · Destroy -{{ tsumm.destroy or 0 }} ·
+          Destructive: {{ plan.destructive_actions or "—" }}
+        </p>
+        <pre class="mono mm-pre">{{ impact.report_text }}</pre>
+
+        {% if (impact.discovery or {}).evidence or impact.evidence or ca.evidence %}
+        <details open>
+          <summary class="mono">Evidence</summary>
+          <ul class="kit-files">
+            {% for ev in (ca.evidence or (impact.discovery.evidence if impact.discovery and impact.discovery.evidence else impact.evidence) or [])[:20] %}
+            <li class="mono">{{ ev.api_call or ev.source }} · {{ ev.resource_type or ev.source_type }} · {{ ev.observed_value }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+
+        {% if art0.diff_files %}
+        <details>
+          <summary class="mono">Git diff intelligence</summary>
+          <ul class="kit-files">
+            {% for d in art0.diff_files[:30] %}
+            <li class="mono">{{ d.action }} {{ d.file }} +{{ d.added_lines }} -{{ d.removed_lines }}{% if d.security_sensitive %} · SENSITIVE{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+
+        {% if art0.dependency_updates or ca.dependencies %}
+        <details>
+          <summary class="mono">Dependencies</summary>
+          <ul class="kit-files">
+            {% for d in (art0.dependency_updates or [])[:20] %}
+            <li class="mono">{{ d.package }} {{ d.old_version or "?" }} → {{ d.new_version }} ({{ d.change_kind }})</li>
+            {% endfor %}
+            {% for d in (ca.dependencies or [])[:20] %}
+            <li class="mono">{{ d.type }} · {{ d.id }} · {{ d.relation }} · {{ d.confidence or "—" }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+
+        {% if ca.verification or impact.verification %}
+        <details>
+          <summary class="mono">Verification plan (raw)</summary>
+          <ol>
+            {% for step in ((ca.verification or impact.verification).steps or []) %}
+            <li>{{ step }}</li>
+            {% endfor %}
+          </ol>
+        </details>
+        {% endif %}
+
+        {% if ca.approval_binding or job.approval_binding %}
+        <details>
+          <summary class="mono">Approval binding / hashes</summary>
+          <pre class="mono mm-pre">{{ (ca.approval_binding or job.approval_binding)|tojson(indent=2) }}</pre>
+        </details>
+        {% endif %}
+
+        <div class="detail-actions" style="margin-top:12px;">
+          <a class="btn btn-ghost" href="{{ url_for('download_impact', job_id=job.job_id) }}">Download impact report</a>
+          {% if review.kit_exists %}
+          <a class="btn btn-ghost" href="{{ url_for('download_kit', job_id=job.job_id) }}">Download kit ZIP</a>
+          {% endif %}
+          <a class="btn btn-ghost" href="{{ url_for('job_detail', job_id=job.job_id, refresh_impact=1) }}">Refresh analysis</a>
+        </div>
+
+        {# Legacy explain / compliance remain available here #}
+        <details style="margin-top:14px;">
+          <summary>Brain heuristic notes / kit file list</summary>
+          <p>{{ explain.headline }}</p>
+          <p class="muted-note">{{ explain.why }}</p>
+          {% if review.kit_files %}
+          <ul class="kit-files">
+            {% for f in review.kit_files %}
+            <li class="mono">{{ f }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </details>
+
+        <details style="margin-top:10px;">
+          <summary>Full findings (technical)</summary>
+          {% for f in findings %}
+          <article class="finding-card sev-{{ f.severity or 'info' }}" style="margin-top:10px;">
+            <div class="finding-top">
+              <span class="sev">{{ f.severity or "info" }}</span>
+              <span class="mono">{{ f.id }}</span>
+            </div>
+            <h4>{{ f.title }}</h4>
+            <p class="finding-desc">{{ f.description }}</p>
+            {% set steps = (f.remediation or {}).steps or [] %}
             {% if steps %}
-            <ol>
-              {% for step in steps %}
-              <li>{{ step }}</li>
-              {% endfor %}
-            </ol>
-            {% else %}
-            <p>See kit runbook/config for {{ f.id }} after you download the ZIP.</p>
+            <ol>{% for step in steps %}<li>{{ step }}</li>{% endfor %}</ol>
             {% endif %}
-            {% if (f.remediation or {}).effort %}
-            <div class="mono" style="margin-top:6px;">Effort: {{ f.remediation.effort }}</div>
-            {% endif %}
-          </div>
-        </article>
-        {% endfor %}
+          </article>
+          {% endfor %}
+        </details>
       </div>
-      {% else %}
-      <div class="empty empty-sm">
-        <strong>No findings file loaded</strong>
-        Scan path: <span class="mono">{{ review.scan_path }}</span>
-      </div>
-      {% endif %}
-    </div>
-
-    {% if job.status == "pending_approval" %}
-    <div class="detail-actions" style="margin-top:22px;">
-      <button class="btn btn-signal" type="button" data-approve="{{ job.job_id }}">Approve plan</button>
-      <button class="btn btn-danger" type="button" data-reject="{{ job.job_id }}">Reject plan</button>
-    </div>
-    {% endif %}
+    </details>
   </article>
 
-  <p class="footer-note">FACE {{ face_version }} · BRAIN EXPLAINS · KIT DOWNLOAD · THEN APPROVE/REJECT</p>
+  <p class="footer-note">FACE {{ face_version }} · MANAGER MODE · RECOMMENDATION ≠ AUTHORIZATION · EXECUTION NOT AUTOMATIC</p>
 </main>
 {% endblock %}

@@ -4,7 +4,7 @@
 # Phase C1: full enterprise multi-engine cloud pack — AWS + Azure.
 # 12 engines cover cloud security engineer scope at enterprise scale
 # (no 18-check ceiling). Deterministic embedded fixtures + legacy AWS/Azure
-# mock reuse. Live SDK backends reserved for later phases.
+# mock reuse. Live AWS collectors via ai_cloud_live_aws (boto3, read-only).
 #
 # Engines: iam, storage, network, logging, crypto, compute, database,
 #          containers, serverless, identity, compliance, drift
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_cloud_pack"
-VERSION = "0.2.0-c2"
+VERSION = "0.3.0-c3"
 DOMAIN = "infrastructure"
 SUBDOMAIN = "infrastructure/cloud"
 SENTINEL = "infrastructure"
@@ -1387,6 +1387,8 @@ def run(params: dict) -> dict:
       target: account label or fixture .json path
       mock_file: optional path to offline fixture
       mock: bool — force mock vulnerable default
+      profile: AWS named profile for live collect (default sentinel-demo / AWS_PROFILE)
+      region: AWS region for live collect (default us-east-1)
       engines: optional list of engine keys to run
     """
     started = _now()
@@ -1433,79 +1435,95 @@ def run(params: dict) -> dict:
             },
         }
 
-    # Live without fixture: soft probe (no silent fail-closed for CI).
-    # Full SDK collectors remain deferred — use mock=True / mock_file for findings.
+    # Live without fixture: collect read-only AWS inventory via boto3.
+    live_meta: dict[str, Any] = {}
     if mode == "live" and not fixture:
-        aws_hint = bool(os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"))
-        az_hint = bool(os.environ.get("AZURE_CLIENT_ID") or os.environ.get("ARM_CLIENT_ID"))
-        live_findings = [
-            {
-                "id": "CLOUD-LIVE-001",
-                "title": "Cloud live SDK collectors deferred — use fixture or enable collectors later",
-                "severity": "info",
-                "description": (
-                    "C2 soft-live mode: no embedded fixture was provided. "
-                    "Set mock=True / mock_file for posture findings, or wire SDK collectors. "
-                    f"AWS creds detected={aws_hint}; Azure creds detected={az_hint}."
-                ),
-                "evidence": {
-                    "check_id": "CLOUD-LIVE-001",
-                    "engine": "drift",
-                    "aws_creds_present": aws_hint,
-                    "azure_creds_present": az_hint,
-                    "passed": True,
+        try:
+            from ai_cloud_live_aws import collect_aws_inventory
+
+            profile = params.get("profile") or os.environ.get("AWS_PROFILE") or "sentinel-demo"
+            region = params.get("region") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+            fixture = collect_aws_inventory(profile=str(profile), region=str(region))
+            mode = "live"
+            live_meta = {
+                "live_collectors": "aws_boto3",
+                "aws_profile": profile,
+                "aws_region": region,
+                "collector_errors": (fixture or {}).get("_collector_errors") or [],
+            }
+            if target in (".", "", "live", "aws"):
+                acc = (fixture or {}).get("account") or {}
+                target = str(acc.get("name") or acc.get("id") or target)
+        except Exception as e:
+            aws_hint = bool(os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"))
+            az_hint = bool(os.environ.get("AZURE_CLIENT_ID") or os.environ.get("ARM_CLIENT_ID"))
+            live_findings = [
+                {
+                    "id": "CLOUD-LIVE-001",
+                    "title": "Cloud live AWS collect failed — credentials or boto3 unavailable",
+                    "severity": "high",
+                    "description": (
+                        "Live collectors could not build an AWS inventory. "
+                        f"Error: {e}. AWS env/profile hint={aws_hint}; Azure hint={az_hint}. "
+                        "Fix: pip install boto3; aws sts get-caller-identity --profile sentinel-demo"
+                    ),
+                    "evidence": {
+                        "check_id": "CLOUD-LIVE-001",
+                        "engine": "drift",
+                        "aws_creds_present": aws_hint,
+                        "azure_creds_present": az_hint,
+                        "error": str(e),
+                        "passed": False,
+                    },
+                    "remediation": {
+                        "steps": [
+                            "pip install boto3",
+                            "aws sts get-caller-identity --profile sentinel-demo",
+                            "Re-run: python ai_cloud_pack.py live  (no --mock)",
+                        ],
+                        "effort": "low",
+                    },
+                }
+            ]
+            return {
+                "tool_id": TOOL_ID,
+                "version": VERSION,
+                "execution": {
+                    "timestamp": _ts(),
+                    "duration_seconds": round((_now() - started).total_seconds(), 3),
+                    "target": target,
+                    "status": "failed",
+                    "mode": "live_soft",
+                    "error": str(e),
                 },
-                "remediation": {
-                    "steps": [
-                        "For lab/CI findings: python worker_gate.py --role cloud --mock",
-                        "For customer accounts: provide mock_file inventory or enable live SDK phase.",
-                    ],
-                    "effort": "medium",
+                "summary": {
+                    "total_findings": 1,
+                    "critical": 0,
+                    "high": 1,
+                    "medium": 0,
+                    "low": 0,
+                    "info": 0,
+                    "risk_score": 90,
+                    "checks_run": 1,
+                    "checks_passed": 0,
+                    "pack_complete_pct": 100,
+                },
+                "findings": live_findings,
+                "metadata": {
+                    "domain": DOMAIN,
+                    "subdomain": SUBDOMAIN,
+                    "sentinel": SENTINEL,
+                    "tier": TIER,
+                    "tags": TAGS,
+                    "llm_summary": f"Cloud pack live collect failed: {e}",
+                    "pack_phase": "C3",
+                    "live_collectors": "failed",
+                    "backends": {
+                        k: {"available": v.get("available"), "version": v.get("version")}
+                        for k, v in backends.items()
+                    },
                 },
             }
-        ]
-        return {
-            "tool_id": TOOL_ID,
-            "version": VERSION,
-            "execution": {
-                "timestamp": _ts(),
-                "duration_seconds": 0.0,
-                "target": target,
-                "status": "success",
-                "mode": "live_soft",
-                "error": None,
-            },
-            "summary": {
-                "total_findings": 1,
-                "critical": 0,
-                "high": 0,
-                "medium": 0,
-                "low": 0,
-                "info": 1,
-                "risk_score": 5,
-                "checks_run": 1,
-                "checks_passed": 1,
-                "pack_complete_pct": 100,
-            },
-            "findings": live_findings,
-            "metadata": {
-                "domain": DOMAIN,
-                "subdomain": SUBDOMAIN,
-                "sentinel": SENTINEL,
-                "tier": TIER,
-                "tags": TAGS,
-                "llm_summary": (
-                    "Cloud pack soft-live: SDK collectors deferred; "
-                    "info finding only. Use mock fixtures for full posture."
-                ),
-                "pack_phase": "C2",
-                "live_collectors": "deferred",
-                "backends": {
-                    k: {"available": v.get("available"), "version": v.get("version")}
-                    for k, v in backends.items()
-                },
-            },
-        }
 
     ctx = PackContext(target, fixture, mode, backends, engines_filter)
     engine_results: list[dict] = []
@@ -1643,6 +1661,7 @@ def run(params: dict) -> dict:
             "engine_codes": ENGINE_CODES,
             "fixture_profile": (fixture or {}).get("_profile") or (fixture or {}).get("_description"),
             "providers": providers,
+            **live_meta,
         },
     }
 
@@ -1669,6 +1688,10 @@ if __name__ == "__main__":
     elif target in ("mock-clean",):
         params["mock_file"] = "mock_cloud_clean.json"
         params["target"] = "mock-cloud-clean"
+    elif target in (".", "live", "aws") or "--live" in flags:
+        params["target"] = "live"
+        params["profile"] = os.environ.get("AWS_PROFILE") or "sentinel-demo"
+        params["region"] = os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
     result = run(params)
     print(json.dumps(result, indent=2))
