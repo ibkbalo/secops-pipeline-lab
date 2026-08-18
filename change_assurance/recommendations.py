@@ -17,6 +17,7 @@ def recommend(
     protected_asset_hit: bool = False,
     capability_unavailable: bool = False,
     force_reject: bool = False,
+    artifact_mapping_uncertain: bool = False,
 ) -> dict[str, Any]:
     """Advisory only — never authorization."""
     questions = manager_questions or []
@@ -30,11 +31,33 @@ def recommend(
             "manager_approval_required": True,
         }
 
+    if finding_status in {"UNVERIFIED", "ERROR", "UNKNOWN"}:
+        return {
+            "recommendation": "RECOMMEND_REVIEW",
+            "deployment_ready": False,
+            "reasons": [
+                f"Finding status={finding_status} — evidence is insufficient or unavailable to confirm the control",
+                "Do not approve remediation based on unverified evidence",
+            ],
+            "manager_approval_required": True,
+        }
+
     if force_reject:
         return {
             "recommendation": "RECOMMEND_REJECT",
             "deployment_ready": False,
             "reasons": ["Hard reject signal (secret / dangerous CI pattern / unsafe container)"],
+            "manager_approval_required": True,
+        }
+
+    if artifact_mapping_uncertain:
+        return {
+            "recommendation": "RECOMMEND_REVIEW",
+            "deployment_ready": False,
+            "reasons": [
+                "ARTIFACT_MAPPING_UNCERTAIN",
+                "Cannot confidently determine which kit artifacts belong to this finding",
+            ],
             "manager_approval_required": True,
         }
 

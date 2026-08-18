@@ -1,11 +1,14 @@
 # change_assurance/domains/cloud/adapter.py
 # Cloud Security adapter — reuses mature predeploy discovery/analysis.
+# Finding status is governed by evidence quality (DIRECT proof required to CONFIRM).
 
 from __future__ import annotations
 
 from typing import Any
 
 from change_assurance.domains.base import DomainAdapter
+from change_assurance.domains.cloud.evidence_registry import cloud_specs
+from change_assurance.evidence_quality import assess_finding_evidence
 from change_assurance.models import new_evidence
 from predeploy import aws_dependency_discovery as aws_disc
 from predeploy import blast_radius as pre_blast
@@ -16,33 +19,66 @@ class CloudSecurityAdapter(DomainAdapter):
     domain = "cloud_security"
 
     def capability_status(self) -> dict[str, Any]:
-        return {"domain": self.domain, "status": "AVAILABLE", "detail": "AWS read-only discovery + Terraform artifact analysis"}
+        return {
+            "domain": self.domain,
+            "status": "AVAILABLE",
+            "detail": "AWS read-only discovery + Terraform artifact analysis + evidence quality checks",
+        }
 
     def verify_finding(self, finding: dict, context: dict) -> dict[str, Any]:
         disc = self._discover(finding, context)
-        status = (disc.get("summary") or {}).get("finding_status") or "UNKNOWN"
+        assessment = disc.get("evidence_assessment")
+        if not assessment:
+            assessment = assess_finding_evidence(
+                finding_id=finding.get("id"),
+                title=finding.get("title"),
+                evidence=disc.get("evidence") or [],
+                specs=cloud_specs(),
+                collection_error=disc.get("error") if disc.get("status") == "FAIL" else None,
+                capability_unavailable=disc.get("status") in {"SKIP", "UNAVAILABLE"},
+            )
+            disc["evidence_assessment"] = assessment
+            disc["evidence"] = assessment.get("labeled_evidence") or disc.get("evidence") or []
+            summary = dict(disc.get("summary") or {})
+            summary["finding_status"] = assessment.get("finding_status") or summary.get("finding_status")
+            disc["summary"] = summary
+
+        status = (
+            (assessment or {}).get("finding_status")
+            or (disc.get("summary") or {}).get("finding_status")
+            or "UNVERIFIED"
+        )
+        context["discovery"] = disc
+        context["evidence_assessment"] = assessment
         return {
             "finding_status": status,
             "discovery": disc,
             "still_present": status == "CONFIRMED",
+            "evidence_assessment": assessment,
+            "evidence_quality": (assessment or {}).get("evidence_quality"),
         }
 
     def gather_evidence(self, finding: dict, context: dict) -> list[dict[str, Any]]:
         disc = context.get("discovery") or self._discover(finding, context)
+        assessment = context.get("evidence_assessment") or disc.get("evidence_assessment") or {}
         out = []
-        for ev in disc.get("evidence") or []:
-            out.append(
-                new_evidence(
-                    finding_id=finding.get("id"),
-                    domain=self.domain,
-                    source_type="aws_api",
-                    source=str(ev.get("api_call") or "aws"),
-                    target=str(ev.get("resource_id") or ""),
-                    observed_value=ev.get("observed_value"),
-                    expected_value=ev.get("expected_value"),
-                    confidence=str(ev.get("confidence") or "HIGH"),
-                )
+        for ev in assessment.get("labeled_evidence") or disc.get("evidence") or []:
+            row = new_evidence(
+                finding_id=finding.get("id"),
+                domain=self.domain,
+                source_type="aws_api",
+                source=str(ev.get("api_call") or "aws"),
+                target=str(ev.get("resource_id") or ""),
+                observed_value=ev.get("observed_value"),
+                expected_value=ev.get("expected_value"),
+                confidence=str(ev.get("confidence") or "HIGH"),
             )
+            row["quality"] = ev.get("quality") or "INDIRECT"
+            row["purpose"] = ev.get("purpose") or "context"
+            row["api_call"] = ev.get("api_call") or row["source"]
+            out.append(row)
+        # DIRECT proof first — Face Advanced / Manager Mode must not lead with account summary
+        out.sort(key=lambda r: 0 if str(r.get("quality") or "").upper() == "DIRECT" else 1)
         return out
 
     def discover_dependencies(self, change: dict, context: dict) -> list[dict[str, Any]]:
@@ -88,12 +124,17 @@ class CloudSecurityAdapter(DomainAdapter):
     def calculate_risk(self, change: dict, context: dict) -> dict[str, Any]:
         impact = context.get("impact") or self.analyze_impact(change, context)
         level = (impact.get("blast_radius") or {}).get("level") or "UNKNOWN"
-        # Remediation risk tracks operational blast, not finding severity.
         return {"level": level, "reasons": (impact.get("blast_radius") or {}).get("reasons") or []}
 
     def generate_manager_questions(self, finding: dict, change: dict, context: dict) -> list[str]:
         disc = context.get("discovery") or {}
+        assessment = context.get("evidence_assessment") or disc.get("evidence_assessment") or {}
         qs = []
+        if assessment.get("finding_status") == "UNVERIFIED":
+            qs.append(
+                "MANAGER CONTEXT REQUIRED: Evidence is insufficient to prove this control — "
+                "confirm the control state manually or re-run discovery with the correct API."
+            )
         if int((disc.get("summary") or {}).get("public_buckets") or 0) > 0:
             qs.append("MANAGER CONTEXT REQUIRED: Are any S3 buckets intentionally public?")
         if int((disc.get("summary") or {}).get("website_buckets") or 0) > 0:

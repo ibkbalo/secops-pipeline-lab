@@ -11,6 +11,29 @@ VERSION = "0.1.0"
 def verification_plan_for_finding(finding_id: str, title: str | None = None) -> dict[str, Any]:
     fid = (finding_id or "").upper()
     title_l = (title or "").lower()
+    if "access analyzer" in title_l or fid == "CLOUD-IAM-013":
+        return {
+            "finding_id": finding_id,
+            "method": "aws_api",
+            "steps": [
+                "Call accessanalyzer.list_analyzers in the finding Region (e.g. us-east-1)",
+                "Confirm at least one analyzer with type=ACCOUNT and status=ACTIVE",
+                "Re-run scan_cloud_pack live and ensure CLOUD-IAM-013 no longer fails",
+            ],
+            "pass_criteria": "ACTIVE ACCOUNT Access Analyzer present in the intended Region",
+            "version": VERSION,
+        }
+    if "guardduty" in title_l or fid in {"CLOUD-LOG-004", "AWS-016"}:
+        return {
+            "finding_id": finding_id,
+            "method": "aws_api",
+            "steps": [
+                "guardduty.list_detectors / get_detector — detector exists and Status=ENABLED",
+                "Re-run scan_cloud_pack live for GuardDuty clearance",
+            ],
+            "pass_criteria": "GuardDuty detector enabled",
+            "version": VERSION,
+        }
     if fid.startswith("CLOUD-STO") or "public access block" in title_l:
         return {
             "finding_id": finding_id,

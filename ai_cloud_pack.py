@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 TOOL_ID = "scan_cloud_pack"
-VERSION = "0.3.0-c3"
+VERSION = "0.3.1-c3"
 DOMAIN = "infrastructure"
 SUBDOMAIN = "infrastructure/cloud"
 SENTINEL = "infrastructure"
@@ -229,16 +229,30 @@ def _fail(
     sev: str,
     desc: str,
     *,
+    control_id: str | None = None,
     resource: dict | None = None,
     evidence: dict | None = None,
     remediation: dict | None = None,
     compliance: list | None = None,
 ) -> None:
+    """Emit a finding only when ok is False. Prefer stable control_id over sequential next_id."""
     if ok:
         return
+    if control_id:
+        fid = str(control_id)
+        used = getattr(ctx, "_used_control_ids", None)
+        if used is None:
+            ctx._used_control_ids = set()  # type: ignore[attr-defined]
+            used = ctx._used_control_ids  # type: ignore[attr-defined]
+        if fid in used:
+            # Duplicate stable ID — keep first finding, do not collide
+            return
+        used.add(fid)
+    else:
+        fid = ctx.next_id(engine)
     findings.append(
         _finding(
-            ctx.next_id(engine),
+            fid,
             title,
             sev,
             desc,
@@ -274,42 +288,57 @@ def _as_list(v: Any) -> list:
 
 
 def _engine_iam(ctx: PackContext) -> list[dict]:
-    """IAM / RBAC — root guards, password policy, admin star, role hygiene."""
+    """IAM / RBAC — root guards, password policy, admin star, role hygiene.
+
+    AWS IAM findings use *stable* control IDs (CLOUD-IAM-00N) that must match
+    ai_remediation_engine.FIX_MAP. IDs are NOT assigned by failure order.
+    """
     f: list[dict] = []
     eng = "iam"
 
     if ctx.aws_has():
         d = ctx.aws
         summ = d.get("iam_account_summary") or {}
-        _fail(ctx, f, eng, "aws", int(summ.get("AccountMFAEnabled") or 0) == 1,
-              "AWS root account MFA enabled", "critical",
-              "Root MFA is disabled. Compromised root password yields full account takeover.",
-              evidence={"source": "iam_account_summary", "AccountMFAEnabled": summ.get("AccountMFAEnabled")},
-              compliance=["CIS AWS 1.5", "NIST 800-53 IA-2", "SOC 2 CC6.1"])
+        # —— Password policy family (shared AWS account password policy) ——
+        # CLOUD-IAM-001 is authoritative: minimum length >= 14
         _fail(ctx, f, eng, "aws", int(summ.get("MinimumPasswordLength") or 0) >= 14,
               "AWS IAM password policy minimum length >= 14", "high",
               "Password minimum length is below the CIS 14-character floor.",
-              evidence={"MinimumPasswordLength": summ.get("MinimumPasswordLength")})
+              control_id="CLOUD-IAM-001",
+              evidence={"MinimumPasswordLength": summ.get("MinimumPasswordLength"),
+                        "source": "iam_account_password_policy"})
         _fail(ctx, f, eng, "aws",
               _truthy(summ.get("RequireUppercaseCharacters")) and _truthy(summ.get("RequireSymbols")),
               "AWS IAM password complexity (uppercase + symbols)", "high",
-              "Password policy does not require both uppercase characters and symbols.")
+              "Password policy does not require both uppercase characters and symbols.",
+              control_id="CLOUD-IAM-002")
         _fail(ctx, f, eng, "aws",
               _truthy(summ.get("RequireLowercaseCharacters")) and _truthy(summ.get("RequireNumbers")),
               "AWS IAM password complexity (lowercase + numbers)", "medium",
-              "Password policy missing lowercase and/or numeric requirements.")
+              "Password policy missing lowercase and/or numeric requirements.",
+              control_id="CLOUD-IAM-003")
         max_age = int(summ.get("MaxPasswordAge") or 0)
         _fail(ctx, f, eng, "aws", max_age > 0 and max_age <= 90,
               "AWS IAM password max age <= 90 days", "medium",
-              f"MaxPasswordAge={max_age or 'unset'}; passwords should expire within 90 days.")
+              f"MaxPasswordAge={max_age or 'unset'}; passwords should expire within 90 days.",
+              control_id="CLOUD-IAM-004")
         reuse = int(summ.get("PasswordReusePrevention") or 0)
         _fail(ctx, f, eng, "aws", reuse >= 24,
               "AWS IAM password reuse prevention >= 24", "low",
-              f"PasswordReusePrevention={reuse}; CIS expects 24 prior passwords blocked.")
+              f"PasswordReusePrevention={reuse}; CIS expects 24 prior passwords blocked.",
+              control_id="CLOUD-IAM-005")
+        # —— Root / identity guards ——
+        _fail(ctx, f, eng, "aws", int(summ.get("AccountMFAEnabled") or 0) == 1,
+              "AWS root account MFA enabled", "critical",
+              "Root MFA is disabled. Compromised root password yields full account takeover.",
+              control_id="CLOUD-IAM-006",
+              evidence={"source": "iam_account_summary", "AccountMFAEnabled": summ.get("AccountMFAEnabled")},
+              compliance=["CIS AWS 1.5", "NIST 800-53 IA-2", "SOC 2 CC6.1"])
         root_keys = int(summ.get("AccountAccessKeysPresent") or d.get("root_access_keys_active") or 0)
         _fail(ctx, f, eng, "aws", root_keys == 0,
               "AWS root account has no active access keys", "critical",
               "Root access keys exist. Never issue access keys for the root user.",
+              control_id="CLOUD-IAM-007",
               evidence={"AccountAccessKeysPresent": root_keys})
 
         cred = _as_list(d.get("iam_credential_report"))
@@ -319,6 +348,7 @@ def _engine_iam(ctx: PackContext) -> list[dict]:
         _fail(ctx, f, eng, "aws", len(both) == 0,
               "No IAM users with both console password and active access keys", "high",
               f"{len(both)} user(s) hold console + access keys (human dual credential risk).",
+              control_id="CLOUD-IAM-008",
               evidence={"users": [u.get("user") for u in both][:10]})
         no_mfa = [u for u in cred
                   if str(u.get("PasswordEnabled", "false")).lower() == "true"
@@ -326,6 +356,7 @@ def _engine_iam(ctx: PackContext) -> list[dict]:
         _fail(ctx, f, eng, "aws", len(no_mfa) == 0,
               "All console IAM users have MFA", "critical",
               f"{len(no_mfa)} console user(s) lack MFA.",
+              control_id="CLOUD-IAM-009",
               evidence={"users": [u.get("user") for u in no_mfa][:10]})
         stale = _as_list(d.get("stale_access_keys") or d.get("iam_stale_keys"))
         # Also derive from credential report dates if provided as age_days
@@ -336,6 +367,7 @@ def _engine_iam(ctx: PackContext) -> list[dict]:
         _fail(ctx, f, eng, "aws", len(stale) == 0,
               "No IAM access keys older than 90 days", "high",
               f"{len(stale)} access key(s) exceed 90-day rotation.",
+              control_id="CLOUD-IAM-010",
               evidence={"keys": stale[:10]})
 
         pols = _as_list(d.get("iam_policies"))
@@ -344,28 +376,31 @@ def _engine_iam(ctx: PackContext) -> list[dict]:
         _fail(ctx, f, eng, "aws", len(wild) == 0,
               "No IAM policies with Action:* Resource:*", "critical",
               f"{len(wild)} customer-managed policy(ies) grant full admin star.",
+              control_id="CLOUD-IAM-011",
               evidence={"policies": [p.get("name") or p.get("arn") for p in wild][:10]})
-        inline_admin = [p for p in pols if p.get("inline_admin") or p.get("attached_to_user")]
-        # only flag if explicit inline_admin marker
         flagged_inline = [p for p in pols if p.get("inline_admin")]
         _fail(ctx, f, eng, "aws", len(flagged_inline) == 0,
               "No inline admin policies on IAM users", "high",
-              f"{len(flagged_inline)} user inline admin policy(ies) should move to groups/roles.")
+              f"{len(flagged_inline)} user inline admin policy(ies) should move to groups/roles.",
+              control_id="CLOUD-IAM-012")
 
         aa = d.get("iam_access_analyzer") or {}
         _fail(ctx, f, eng, "aws", _truthy(aa.get("enabled")),
               "IAM Access Analyzer enabled", "high",
-              "Access Analyzer is off — external share paths are not continuously evaluated.")
+              "Access Analyzer is off — external share paths are not continuously evaluated.",
+              control_id="CLOUD-IAM-013")
         sso = d.get("iam_identity_center") or d.get("sso") or {}
         _fail(ctx, f, eng, "aws",
               _truthy(sso.get("enabled")) or _truthy(d.get("identity_center_enabled")),
               "IAM Identity Center (SSO) preferred over long-lived IAM users", "medium",
-              "Workforce access still centers on long-lived IAM users without Identity Center.")
+              "Workforce access still centers on long-lived IAM users without Identity Center.",
+              control_id="CLOUD-IAM-014")
         support = d.get("iam_support_role") or d.get("support_role") or {}
         _fail(ctx, f, eng, "aws",
               _truthy(support.get("exists")) if support else _truthy(d.get("support_role_present")),
               "AWS Support IAM role present for incident response", "low",
-              "No dedicated support/break-glass role evidenced for premium support cases.")
+              "No dedicated support/break-glass role evidenced for premium support cases.",
+              control_id="CLOUD-IAM-015")
 
     if ctx.az_has():
         d = ctx.azure
@@ -378,22 +413,25 @@ def _engine_iam(ctx: PackContext) -> list[dict]:
         _fail(ctx, f, eng, "azure", len(over) == 0,
               "No standing Owner on subscription root scope", "critical",
               f"{len(over)} Owner/User Access Admin assignment(s) at subscription root.",
+              control_id="CLOUD-IAM-016",
               evidence={"assignments": over[:10]})
         custom = _as_list(d.get("custom_roles_with_wildcard") or (d.get("rbac") or {}).get("wildcard_custom_roles"))
         _fail(ctx, f, eng, "azure", len(custom) == 0,
               "No custom roles with Actions:*", "high",
-              f"{len(custom)} custom role(s) grant wildcard actions.")
+              f"{len(custom)} custom role(s) grant wildcard actions.",
+              control_id="CLOUD-IAM-017")
         sp_owners = _as_list(d.get("service_principals_with_owner") or [])
         _fail(ctx, f, eng, "azure", len(sp_owners) == 0,
               "No service principals with permanent Owner role", "high",
-              f"{len(sp_owners)} service principal(s) hold permanent Owner.")
-        mfa_admins = d.get("admin_mfa_enforced")
+              f"{len(sp_owners)} service principal(s) hold permanent Owner.",
+              control_id="CLOUD-IAM-018")
+        mfa_admins = (d.get("privileged_role_mfa") or d.get("pim") or {}).get("mfa_enforced")
         if mfa_admins is None:
-            mfa_admins = (d.get("rbac") or {}).get("admin_mfa_enforced")
-        # default fail if missing — enterprise expects evidence
+            mfa_admins = d.get("azure_privileged_role_mfa_enforced")
         _fail(ctx, f, eng, "azure", _truthy(mfa_admins) if mfa_admins is not None else False,
-              "Azure privileged role MFA enforced", "critical",
-              "No evidence that MFA is enforced for privileged Azure RBAC roles.")
+              "Azure privileged role MFA enforced", "high",
+              "Privileged Azure roles lack enforced MFA / PIM.",
+              control_id="CLOUD-IAM-019")
 
     return f
 

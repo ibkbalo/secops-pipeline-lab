@@ -28,6 +28,38 @@ from change_assurance.secret_redaction import redact_text
 VERSION = "0.2.0-p3"
 
 
+def assurance_cache_incomplete(report: dict[str, Any] | None) -> bool:
+    """
+    True when a cached assurance/impact artifact predates evidence-quality
+    or per-finding artifact scoping and must not be served as live proof.
+    """
+    if not isinstance(report, dict) or not report:
+        return True
+    assessment = report.get("evidence_assessment")
+    evidence = report.get("evidence") or []
+    legacy = report.get("legacy_impact") if isinstance(report.get("legacy_impact"), dict) else {}
+    if not assessment:
+        assessment = legacy.get("evidence_assessment")
+    if not evidence:
+        evidence = legacy.get("evidence") or (legacy.get("discovery") or {}).get("evidence") or []
+    if not assessment:
+        return True
+    if evidence and not any(isinstance(e, dict) and e.get("quality") for e in evidence):
+        return True
+    # Pre–placeholder-scoping caches lack artifact_scope and may REJECT from whole-kit REPLACE_*
+    if report.get("domain") == "cloud_security" or str(report.get("role") or "") == "cloud" or legacy.get("role") == "cloud":
+        if not report.get("artifact_scope") and not legacy.get("artifact_scope"):
+            return True
+        tf = legacy.get("terraform") if isinstance(legacy.get("terraform"), dict) else {}
+        flags = tf.get("flags") if isinstance(tf.get("flags"), dict) else {}
+        # Cached whole-kit placeholder reject without scoped relevant_artifacts → regenerate
+        if flags.get("placeholder_unresolved") and not (
+            report.get("relevant_artifacts") or legacy.get("relevant_artifacts")
+        ):
+            return True
+    return False
+
+
 def get_adapter(domain: str):
     if domain == "cloud_security":
         return CloudSecurityAdapter()
@@ -71,24 +103,45 @@ def _kit_preview(kit_path: str | None, finding_id: str | None) -> tuple[list[str
     files: list[str] = []
     preview = ""
     try:
+        from predeploy.terraform_plan_analysis import resolve_finding_kit_artifacts
+
+        scope = resolve_finding_kit_artifacts(p, finding_id)
+        scoped_paths = list(scope.get("paths") or [])
         if p.is_file() and p.suffix.lower() == ".zip":
             with zipfile.ZipFile(p, "r") as zf:
                 names = [n for n in zf.namelist() if not n.endswith("/")]
-                files = names[:40]
-                preferred = None
-                for n in names:
-                    if finding_id and finding_id in n and n.endswith((".tf", ".yml", ".yaml", ".ps1", ".py", ".md")):
-                        preferred = n
-                        break
-                if not preferred:
+                # Prefer finding-linked artifacts for preview/source_files
+                if scoped_paths:
+                    files = scoped_paths[:40]
+                    preferred = next(
+                        (n for n in scoped_paths if n.lower().endswith((".tf", ".yml", ".yaml", ".conf"))),
+                        scoped_paths[0],
+                    )
+                    match = next(
+                        (n for n in names if n.replace("\\", "/") == preferred or n.replace("\\", "/").endswith(preferred)),
+                        None,
+                    )
+                    if match:
+                        preview = zf.read(match).decode("utf-8", errors="replace")[:4000]
+                else:
+                    files = [n.replace("\\", "/") for n in names[:40]]
+                    preferred = None
                     for n in names:
-                        if n.endswith(".tf"):
+                        if finding_id and finding_id in n and n.endswith((".tf", ".yml", ".yaml", ".ps1", ".py", ".md")):
                             preferred = n
                             break
-                if preferred:
-                    preview = zf.read(preferred).decode("utf-8", errors="replace")[:4000]
+                    if preferred:
+                        preview = zf.read(preferred).decode("utf-8", errors="replace")[:4000]
         elif p.is_dir():
-            files = [str(x.relative_to(p)).replace("\\", "/") for x in p.rglob("*") if x.is_file()][:40]
+            if scoped_paths:
+                files = scoped_paths[:40]
+                for rel in scoped_paths:
+                    cand = p / rel
+                    if cand.is_file() and cand.suffix.lower() in {".tf", ".yml", ".yaml", ".conf"}:
+                        preview = cand.read_text(encoding="utf-8", errors="replace")[:4000]
+                        break
+            else:
+                files = [str(x.relative_to(p)).replace("\\", "/") for x in p.rglob("*") if x.is_file()][:40]
     except Exception:
         return files, preview
     return files, preview
@@ -133,6 +186,21 @@ def assure_job(
     context["discovery"] = verified.get("discovery") or context.get("repo_discovery")
     report["finding_status"] = verified.get("finding_status") or "UNKNOWN"
     report["evidence"] = adapter.gather_evidence(primary, context)
+    report["evidence_assessment"] = verified.get("evidence_assessment") or (
+        (context.get("discovery") or {}).get("evidence_assessment")
+    )
+    report["evidence_quality"] = (report.get("evidence_assessment") or {}).get("evidence_quality")
+    # Internal validation (not Manager Mode UI) — confirm registry match for live debugging
+    _ea = report.get("evidence_assessment") or {}
+    report["evidence_registry_match"] = _ea.get("registry_match") or {
+        "finding_id": finding_id,
+        "matched_evidence_spec": _ea.get("control_key"),
+        "collector": (_ea.get("preferred_sources") or [None])[0]
+        if isinstance(_ea.get("preferred_sources"), list)
+        else _ea.get("evidence_source"),
+        "required_fields": _ea.get("required_fields"),
+        "preferred_source": _ea.get("evidence_source") or _ea.get("preferred_sources"),
+    }
 
     files, preview = _kit_preview(job.get("kit_path"), finding_id)
     # Prefer richer kit texts for DevSecOps when ZIP/dir present
@@ -241,9 +309,32 @@ def assure_job(
         report["capabilities"].append({"status": "CAPABILITY_PARTIAL", "detail": "Unsupported finding type"})
 
     cap_unavail = adapter.capability_status().get("status") == "CAPABILITY_UNAVAILABLE"
-    placeholders = bool((changes.get("flags") or {}).get("placeholder_unresolved")) or any(
-        "REPLACE_" in str(e) for e in (validation.get("errors") or [])
+    artifact_scope = validation.get("artifact_scope") or (validation.get("analysis") or {}).get("artifact_scope") or {}
+    mapping_uncertain = bool(
+        artifact_scope.get("uncertain") or artifact_scope.get("reason") == "ARTIFACT_MAPPING_UNCERTAIN"
     )
+    placeholders = False
+    if not mapping_uncertain:
+        placeholders = bool((changes.get("flags") or {}).get("placeholder_unresolved")) or any(
+            "REPLACE_" in str(e) for e in (validation.get("errors") or [])
+        )
+    # Whole-job safety: sibling kit placeholders must not silently disappear
+    sibling_placeholders: list[dict[str, str]] = []
+    try:
+        from predeploy.terraform_plan_analysis import scan_kit_placeholders
+
+        relevant = list(artifact_scope.get("paths") or validation.get("relevant_artifacts") or [])
+        all_hits = scan_kit_placeholders(job.get("kit_path"))
+        sibling_placeholders = [
+            h
+            for h in all_hits
+            if not any(
+                str(h.get("file") or "").endswith(str(r)) or str(h.get("file")) == str(r) for r in relevant
+            )
+        ]
+    except Exception:
+        sibling_placeholders = []
+
     secret_reject = any("SECRET_REDACTED" in str(e) for e in (validation.get("errors") or []))
     hard_reject = secret_reject or bool((changes.get("flags") or {}).get("secret_copied")) or bool(
         (changes.get("flags") or {}).get("write_all") and (changes.get("flags") or {}).get("pull_request_target")
@@ -259,10 +350,26 @@ def assure_job(
         protected_asset_hit=False,
         capability_unavailable=cap_unavail or partial,
         force_reject=hard_reject,
+        artifact_mapping_uncertain=mapping_uncertain,
     )
+    if sibling_placeholders and rec.get("recommendation") == "RECOMMEND_APPROVE":
+        # Finding may be an approve candidate, but whole-job must not be fully green
+        rec = dict(rec)
+        rec["recommendation"] = "RECOMMEND_REVIEW"
+        rec["deployment_ready"] = False
+        rec["reasons"] = list(rec.get("reasons") or []) + [
+            "JOB_HAS_UNRESOLVED_SIBLING_ARTIFACTS — other findings in this kit still have REPLACE_* placeholders"
+        ]
     report["recommendation"] = rec["recommendation"]
-    report["deployment_ready"] = bool(rec.get("deployment_ready"))
+    report["deployment_ready"] = bool(rec.get("deployment_ready")) and not sibling_placeholders
     report["recommendation_reasons"] = rec.get("reasons") or []
+    report["relevant_artifacts"] = validation.get("relevant_artifacts") or artifact_scope.get("paths") or files
+    report["relevant_placeholders"] = validation.get("placeholders") or changes.get("placeholders") or []
+    report["sibling_placeholder_artifacts"] = sibling_placeholders[:20]
+    report["job_fully_approvable"] = (
+        bool(rec.get("deployment_ready")) and not sibling_placeholders and not placeholders
+    )
+    report["artifact_scope"] = artifact_scope
     report["manager_approval_required"] = True
     report["auto_apply_forbidden"] = True
     report["execution_authorized"] = False
@@ -301,12 +408,17 @@ def assure_job(
         "manager_context_required": report["manager_context_required"],
         "artifact_complete": not placeholders,
         "unresolved_placeholders": placeholders,
+        "relevant_artifacts": report.get("relevant_artifacts"),
+        "sibling_placeholder_artifacts": sibling_placeholders[:10],
+        "job_fully_approvable": report.get("job_fully_approvable"),
         "validator_status": report["validation_status"],
         "change_matches_finding": "UNKNOWN" if domain != "cloud_security" else True,
         "validation_mode": report.get("validation_mode"),
         "cross_agent_review": cross_hooks,
         "execution_authorized": False,
         "execution_performed": False,
+        "evidence_quality": report.get("evidence_quality"),
+        "evidence_assessment": report.get("evidence_assessment"),
     }
 
     report["report_text"] = _render_text(report, primary)
@@ -358,7 +470,13 @@ def _to_legacy_impact(report: dict, job: dict) -> dict[str, Any]:
         "focus_finding_ids": report.get("focus_finding_ids"),
         "finding_status": report.get("finding_status"),
         "scope": str((report.get("blast_radius") or {}).get("scope") or "resource").lower().replace("_", "-"),
-        "discovery": {"summary": {"finding_status": report.get("finding_status")}, "evidence": report.get("evidence") or [], "kind": report.get("domain"), "potentially_affected_workloads": "see change_assurance"},
+        "discovery": {
+            "summary": {"finding_status": report.get("finding_status")},
+            "evidence": report.get("evidence") or [],
+            "evidence_assessment": report.get("evidence_assessment"),
+            "kind": report.get("domain"),
+            "potentially_affected_workloads": "see change_assurance",
+        },
         "terraform": {
             "validate": validation if art.get("artifact_type") == "terraform" else {"status": report.get("validation_status")},
             "plan": (analysis.get("plan") if analysis else {"status": report.get("validation_status"), "summary": {}, "destructive_actions": "NONE"}),
@@ -386,8 +504,16 @@ def _to_legacy_impact(report: dict, job: dict) -> dict[str, Any]:
         "repo_fingerprint": report.get("repo_fingerprint"),
         "approval_integrity": report.get("approval_integrity"),
         "cross_agent_review": report.get("cross_agent_review"),
-        "evidence": report.get("evidence"),
-    }
+            "evidence": report.get("evidence"),
+            "evidence_assessment": report.get("evidence_assessment"),
+            "evidence_quality": report.get("evidence_quality"),
+            "evidence_registry_match": report.get("evidence_registry_match"),
+            "relevant_artifacts": report.get("relevant_artifacts"),
+            "relevant_placeholders": report.get("relevant_placeholders"),
+            "sibling_placeholder_artifacts": report.get("sibling_placeholder_artifacts"),
+            "job_fully_approvable": report.get("job_fully_approvable"),
+            "artifact_scope": report.get("artifact_scope"),
+        }
 
 
 def persist_assurance(workspace: Path | str, report: dict[str, Any]) -> Path:
@@ -429,28 +555,48 @@ def load_or_assure(
     if cached.is_file() and not refresh:
         try:
             report = json.loads(cached.read_text(encoding="utf-8-sig"))
+            if assurance_cache_incomplete(report):
+                report = None  # pre-EQ / incomplete cache — must re-collect
         except Exception:
             report = None
     if report is None:
-        # Fall back to legacy impact cache
+        # Fall back to legacy impact cache (only if it already has evidence-quality)
         legacy = workspace / "impact" / f"{job_id}.json"
         if legacy.is_file() and not refresh:
             try:
                 old = json.loads(legacy.read_text(encoding="utf-8-sig"))
-                report = empty_assurance_report(
+                wrapped = empty_assurance_report(
                     job_id=job_id,
                     domain=domain_for_role(job.get("role")),
                     role=job.get("role"),
                 )
-                report["legacy_impact"] = old
-                report["recommendation"] = old.get("recommendation") or "RECOMMEND_REVIEW"
-                report["finding_status"] = old.get("finding_status")
-                report["blast_radius"] = old.get("blast_radius") or report["blast_radius"]
-                report["report_text"] = old.get("report_text") or ""
-                report["deployment_ready"] = old.get("deployment_ready")
+                wrapped["legacy_impact"] = old
+                wrapped["recommendation"] = old.get("recommendation") or "RECOMMEND_REVIEW"
+                wrapped["finding_status"] = old.get("finding_status")
+                wrapped["blast_radius"] = old.get("blast_radius") or wrapped["blast_radius"]
+                wrapped["report_text"] = old.get("report_text") or ""
+                wrapped["deployment_ready"] = old.get("deployment_ready")
+                wrapped["evidence"] = old.get("evidence") or (old.get("discovery") or {}).get("evidence") or []
+                wrapped["evidence_assessment"] = old.get("evidence_assessment")
+                wrapped["evidence_quality"] = old.get("evidence_quality")
+                if not assurance_cache_incomplete(wrapped):
+                    report = wrapped
             except Exception:
                 report = None
     if report is None or refresh:
+        # Explicit refresh: drop stale on-disk artifacts so we never re-read them mid-flight
+        if refresh:
+            for p in (
+                workspace / "assurance" / f"{job_id}.json",
+                workspace / "assurance" / f"{job_id}.md",
+                workspace / "impact" / f"{job_id}.json",
+                workspace / "impact" / f"{job_id}.md",
+            ):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                except Exception:
+                    pass
         report = assure_job(job, findings, try_terraform_cli=try_terraform_cli)
         persist_assurance(workspace, report)
 

@@ -19,15 +19,23 @@ class TerraformArtifactHandler(ArtifactHandler):
     def validate(self, artifact: dict, context: dict) -> dict[str, Any]:
         kit = context.get("kit_path") or artifact.get("meta", {}).get("kit_path")
         focus = [artifact.get("finding_id")] if artifact.get("finding_id") else None
+        if context.get("finding_id") and (
+            not focus or str(context.get("finding_id")) not in {str(x) for x in (focus or [])}
+        ):
+            focus = [context.get("finding_id")] + (focus or [])
         analysis = tfplan.analyze_kit_terraform(kit, focus, try_cli=bool(context.get("try_terraform_cli")))
         status = (analysis.get("validate") or {}).get("status") or "VALIDATION_UNAVAILABLE"
         if status == "PASS" and analysis.get("flags", {}).get("placeholder_unresolved"):
             status = "FAIL"
+        scope = analysis.get("artifact_scope") or {}
         return {
             "status": status,
             "errors": (analysis.get("validate") or {}).get("errors") or [],
             "analysis": analysis,
             "mode": (analysis.get("validate") or {}).get("mode") or "static",
+            "artifact_scope": scope,
+            "relevant_artifacts": scope.get("paths") or analysis.get("files") or [],
+            "placeholders": analysis.get("placeholders") or [],
         }
 
     def analyze_changes(self, artifact: dict, context: dict) -> dict[str, Any]:

@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 PLACEHOLDER_RE = re.compile(r"REPLACE_[A-Z0-9_]+|TODO_|CHANGEME|YOUR_", re.I)
 RESOURCE_RE = re.compile(
@@ -35,9 +35,161 @@ NET_TYPES = {
     "aws_subnet",
 }
 
+# Shared remediation artifacts intentionally covering multiple finding IDs.
+# Keep in sync with ai_remediation_engine.PASSWORD_POLICY_* when possible.
+SHARED_ARTIFACT_GROUPS: dict[str, frozenset[str]] = {
+    "terraform/aws_iam_account_password_policy.tf": frozenset(
+        {
+            "CLOUD-IAM-001",
+            "CLOUD-IAM-002",
+            "CLOUD-IAM-003",
+            "CLOUD-IAM-004",
+            "CLOUD-IAM-005",
+        }
+    ),
+}
 
-def _read_tf_sources(kit_path: Path | None, focus_ids: list[str] | None = None) -> dict[str, str]:
-    """Map relative path -> tf content from kit zip/dir."""
+
+def _norm_rel(path: str) -> str:
+    return str(path or "").replace("\\", "/").lstrip("./")
+
+
+def _load_kit_manifest(kit_path: Path | None) -> dict[str, Any] | None:
+    if not kit_path:
+        return None
+    kit_path = Path(kit_path)
+    try:
+        if kit_path.is_file() and kit_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(kit_path, "r") as zf:
+                for name in zf.namelist():
+                    if name.replace("\\", "/").endswith("manifest.json"):
+                        return json.loads(zf.read(name).decode("utf-8", errors="replace"))
+        elif kit_path.is_dir():
+            man = kit_path / "manifest.json"
+            if man.is_file():
+                return json.loads(man.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return None
+    return None
+
+
+def shared_artifact_paths_for_finding(finding_id: str | None) -> list[str]:
+    fid = str(finding_id or "").strip().upper()
+    if not fid:
+        return []
+    out: list[str] = []
+    for path, ids in SHARED_ARTIFACT_GROUPS.items():
+        if fid in {x.upper() for x in ids}:
+            out.append(path)
+    return out
+
+
+def resolve_finding_kit_artifacts(
+    kit_path: str | Path | None,
+    finding_id: str | None,
+    *,
+    focus_finding_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Resolve remediation artifacts that belong to a finding (direct + shared).
+    Never treats the whole kit as the finding's artifact set.
+    """
+    fid = str(finding_id or "").strip()
+    focus = [str(x) for x in (focus_finding_ids or []) if x]
+    if fid and fid not in focus:
+        focus = [fid] + focus
+
+    kit_path = Path(kit_path) if kit_path else None
+    all_names = _list_kit_member_names(kit_path)
+    manifest = _load_kit_manifest(kit_path)
+    linked: list[str] = []
+    mapping = "uncertain"
+
+    # 1) Manifest items for this finding / focus IDs
+    if manifest and isinstance(manifest.get("items"), list):
+        for item in manifest["items"]:
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("check_id") or "").strip()
+            if cid and (cid == fid or cid in focus):
+                for f in item.get("files") or []:
+                    linked.append(_norm_rel(str(f)))
+                if linked:
+                    mapping = "manifest"
+
+    # 2) Shared groups (password policy, etc.)
+    for focus_id in focus or ([fid] if fid else []):
+        for shared in shared_artifact_paths_for_finding(focus_id):
+            # Prefer actual kit path casing/location
+            match = next((n for n in all_names if n.endswith(shared) or n == shared), shared)
+            linked.append(_norm_rel(match))
+            if mapping == "uncertain":
+                mapping = "shared"
+
+    # 3) Filename contains finding id (runbook/config/tf named after control)
+    if fid:
+        for n in all_names:
+            base = n.split("/")[-1]
+            if fid in base or fid in n:
+                # Skip generic README/manifest
+                if base.lower() in {"readme.md", "manifest.json"}:
+                    continue
+                linked.append(_norm_rel(n))
+                if mapping == "uncertain":
+                    mapping = "filename"
+
+    # Dedupe preserve order
+    seen: set[str] = set()
+    paths: list[str] = []
+    for p in linked:
+        if p and p not in seen:
+            seen.add(p)
+            paths.append(p)
+
+    # Keep only paths that exist in kit when we know kit members
+    if all_names:
+        name_set = set(all_names)
+        existing = []
+        for p in paths:
+            if p in name_set:
+                existing.append(p)
+                continue
+            # allow suffix match (zip may nest)
+            hit = next((n for n in all_names if n.endswith("/" + p) or n.endswith(p)), None)
+            if hit:
+                existing.append(hit)
+        paths = list(dict.fromkeys(existing))
+
+    uncertain = mapping == "uncertain" or (bool(fid) and not paths and bool(all_names))
+    if uncertain and not paths:
+        mapping = "uncertain"
+
+    return {
+        "finding_id": fid or None,
+        "paths": paths,
+        "tf_paths": [p for p in paths if p.lower().endswith(".tf")],
+        "mapping": mapping if paths else "uncertain",
+        "uncertain": bool(uncertain and not paths),
+        "reason": "ARTIFACT_MAPPING_UNCERTAIN" if (uncertain and not paths) else None,
+    }
+
+
+def _list_kit_member_names(kit_path: Path | None) -> list[str]:
+    if not kit_path or not kit_path.exists():
+        return []
+    names: list[str] = []
+    try:
+        if kit_path.is_file() and kit_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(kit_path, "r") as zf:
+                names = [_norm_rel(n) for n in zf.namelist() if not n.endswith("/")]
+        elif kit_path.is_dir():
+            names = [_norm_rel(str(p.relative_to(kit_path))) for p in kit_path.rglob("*") if p.is_file()]
+    except Exception:
+        return []
+    return names
+
+
+def _read_all_tf_sources(kit_path: Path | None) -> dict[str, str]:
     out: dict[str, str] = {}
     if not kit_path:
         return out
@@ -48,22 +200,106 @@ def _read_tf_sources(kit_path: Path | None, focus_ids: list[str] | None = None) 
                 for name in zf.namelist():
                     if not name.lower().endswith(".tf"):
                         continue
-                    if focus_ids and not any(fid in name for fid in focus_ids):
-                        # still include all if none match later
-                        pass
-                    out[name.replace("\\", "/")] = zf.read(name).decode("utf-8", errors="replace")
+                    out[_norm_rel(name)] = zf.read(name).decode("utf-8", errors="replace")
         except Exception:
             return out
     elif kit_path.is_dir():
         for p in kit_path.rglob("*.tf"):
-            rel = str(p.relative_to(kit_path)).replace("\\", "/")
+            rel = _norm_rel(str(p.relative_to(kit_path)))
             out[rel] = p.read_text(encoding="utf-8", errors="replace")
-    # Prefer focus files if present
-    if focus_ids:
-        focused = {k: v for k, v in out.items() if any(fid in k for fid in focus_ids)}
-        if focused:
-            return focused
     return out
+
+
+def _read_tf_sources(
+    kit_path: Path | None,
+    focus_ids: list[str] | None = None,
+    *,
+    allowed_rel_paths: list[str] | None = None,
+) -> dict[str, str]:
+    """
+    Map relative path -> tf content from kit zip/dir.
+    When focusing a finding, ONLY return that finding's linked/shared .tf files.
+    Never fall back to scanning the entire kit for an unrelated REPLACE_*.
+    """
+    all_tf = _read_all_tf_sources(kit_path)
+    if not all_tf:
+        return {}
+
+    if allowed_rel_paths is not None:
+        allowed = {_norm_rel(p) for p in allowed_rel_paths}
+        if not allowed:
+            return {}
+        selected: dict[str, str] = {}
+        for path, text in all_tf.items():
+            if path in allowed or any(path.endswith("/" + a) or path.endswith(a) for a in allowed):
+                selected[path] = text
+        return selected
+
+    if focus_ids:
+        # Resolve via shared groups + filename; do NOT return whole kit on miss
+        primary = focus_ids[0] if focus_ids else None
+        scope = resolve_finding_kit_artifacts(kit_path, primary, focus_finding_ids=focus_ids)
+        tf_paths = scope.get("tf_paths") or []
+        if tf_paths:
+            return _read_tf_sources(kit_path, None, allowed_rel_paths=tf_paths)
+        # Filename contains any focus id
+        focused = {k: v for k, v in all_tf.items() if any(fid in k for fid in focus_ids)}
+        return focused  # may be empty — caller treats as scoped miss / uncertain
+
+    return all_tf
+
+
+def scan_kit_placeholders(
+    kit_path: str | Path | None,
+    *,
+    only_paths: list[str] | None = None,
+    exclude_paths: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Detect unresolved placeholders in kit members (tf/conf/yml text)."""
+    kit_path = Path(kit_path) if kit_path else None
+    if not kit_path:
+        return []
+    only = {_norm_rel(p) for p in (only_paths or [])} or None
+    excl = {_norm_rel(p) for p in (exclude_paths or [])}
+    hits: list[dict[str, str]] = []
+    names = _list_kit_member_names(kit_path)
+    for name in names:
+        if not name.lower().endswith((".tf", ".conf", ".yml", ".yaml", ".txt", ".hcl")):
+            continue
+        if only is not None and not (
+            name in only or any(name.endswith("/" + a) or name.endswith(a) for a in only)
+        ):
+            continue
+        if name in excl or any(name.endswith("/" + e) or name.endswith(e) for e in excl):
+            continue
+        text = _read_kit_member_text(kit_path, name)
+        if text is None:
+            continue
+        for m in PLACEHOLDER_RE.finditer(text):
+            hits.append({"file": name, "token": m.group(0)})
+    return hits
+
+
+def _read_kit_member_text(kit_path: Path, rel: str) -> str | None:
+    try:
+        if kit_path.is_file() and kit_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(kit_path, "r") as zf:
+                # exact or endswith
+                names = zf.namelist()
+                match = next((n for n in names if _norm_rel(n) == rel or _norm_rel(n).endswith(rel)), None)
+                if not match:
+                    return None
+                return zf.read(match).decode("utf-8", errors="replace")
+        p = kit_path / rel
+        if p.is_file():
+            return p.read_text(encoding="utf-8", errors="replace")
+        # try endswith search
+        for cand in kit_path.rglob("*"):
+            if cand.is_file() and _norm_rel(str(cand.relative_to(kit_path))).endswith(rel):
+                return cand.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    return None
 
 
 def analyze_terraform_sources(sources: dict[str, str]) -> dict[str, Any]:
@@ -208,9 +444,69 @@ def analyze_kit_terraform(
     focus_finding_ids: list[str] | None = None,
     *,
     try_cli: bool = True,
+    allowed_rel_paths: list[str] | None = None,
 ) -> dict[str, Any]:
-    sources = _read_tf_sources(Path(kit_path) if kit_path else None, focus_finding_ids)
-    analysis = analyze_terraform_sources(sources)
+    kit = Path(kit_path) if kit_path else None
+    primary = (focus_finding_ids or [None])[0]
+    scope = (
+        resolve_finding_kit_artifacts(kit, primary, focus_finding_ids=focus_finding_ids)
+        if focus_finding_ids
+        else {"paths": [], "tf_paths": [], "mapping": "kit", "uncertain": False, "reason": None}
+    )
+    allow = allowed_rel_paths
+    if allow is None and focus_finding_ids:
+        allow = list(scope.get("tf_paths") or [])
+        # If mapping resolved non-tf only, do not scan whole kit
+        if scope.get("paths") and not allow:
+            allow = []
+
+    sources = _read_tf_sources(kit, focus_finding_ids if allow is None else None, allowed_rel_paths=allow)
+
+    if focus_finding_ids and scope.get("uncertain") and not sources and not scope.get("paths"):
+        analysis = analyze_terraform_sources({})
+        analysis["validate"] = {
+            "status": "VALIDATION_UNAVAILABLE",
+            "errors": ["ARTIFACT_MAPPING_UNCERTAIN — cannot confidently bind kit artifacts to this finding"],
+            "mode": "scoped",
+        }
+        analysis["plan"]["status"] = "SKIP"
+        analysis["flags"]["placeholder_unresolved"] = False
+        analysis["placeholders"] = []
+        analysis["artifact_scope"] = scope
+        analysis["cli"] = {"skipped": True, "reason": "ARTIFACT_MAPPING_UNCERTAIN"}
+        return analysis
+
+    if focus_finding_ids and not sources and scope.get("paths"):
+        # Linked runbook/config only — do not invent whole-kit terraform scope
+        analysis = analyze_terraform_sources({})
+        analysis["validate"] = {"status": "PASS", "errors": [], "mode": "scoped_non_tf"}
+        analysis["plan"]["status"] = "SKIP"
+        analysis["flags"]["placeholder_unresolved"] = False
+        analysis["placeholders"] = []
+    else:
+        analysis = analyze_terraform_sources(sources)
+
+    analysis["artifact_scope"] = scope if focus_finding_ids else {"mapping": "kit", "paths": list(sources.keys())}
+
+    # Check linked non-tf configs for placeholders (scoped only; do not weaken detection)
+    if focus_finding_ids:
+        linked = list(scope.get("paths") or [])
+        scoped_hits = scan_kit_placeholders(kit, only_paths=linked)
+        for hit in scoped_hits:
+            if not any(
+                h.get("file") == hit.get("file") and h.get("token") == hit.get("token")
+                for h in analysis["placeholders"]
+            ):
+                analysis["placeholders"].append(hit)
+            analysis["flags"]["placeholder_unresolved"] = True
+        if analysis["flags"]["placeholder_unresolved"]:
+            analysis["validate"]["status"] = "FAIL"
+            analysis["validate"]["errors"] = [
+                f"Unresolved placeholder: {p['token']} in {p['file']}" for p in analysis["placeholders"][:10]
+            ]
+            if analysis["plan"].get("status") != "SKIP":
+                analysis["plan"]["status"] = "FAIL"
+
     if try_cli:
         cli = maybe_run_terraform_cli(sources)
         analysis["cli"] = cli

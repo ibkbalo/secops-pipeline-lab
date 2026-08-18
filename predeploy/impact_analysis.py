@@ -121,6 +121,15 @@ def load_or_analyze(
             "dependencies": report.get("dependencies"),
             "verification": report.get("verification"),
             "evidence": report.get("evidence"),
+            "evidence_assessment": report.get("evidence_assessment"),
+            "evidence_quality": report.get("evidence_quality"),
+            "evidence_registry_match": report.get("evidence_registry_match"),
+            "finding_status": report.get("finding_status"),
+            "relevant_artifacts": report.get("relevant_artifacts"),
+            "relevant_placeholders": report.get("relevant_placeholders"),
+            "sibling_placeholder_artifacts": report.get("sibling_placeholder_artifacts"),
+            "job_fully_approvable": report.get("job_fully_approvable"),
+            "artifact_scope": report.get("artifact_scope"),
         }
         return legacy
     # Legacy-only cache wrap

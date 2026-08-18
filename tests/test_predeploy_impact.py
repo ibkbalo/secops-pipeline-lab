@@ -61,7 +61,19 @@ resource "aws_s3_account_public_access_block" "sentinel" {
                 "website_buckets": 0,
                 "finding_status": "CONFIRMED",
             },
-            "evidence": [],
+            "evidence": [
+                {
+                    "api_call": "s3control.get_public_access_block",
+                    "observed_value": {
+                        "BlockPublicAcls": False,
+                        "IgnorePublicAcls": False,
+                        "BlockPublicPolicy": False,
+                        "RestrictPublicBuckets": False,
+                    },
+                    "quality": "DIRECT",
+                    "purpose": "proof",
+                }
+            ],
             "potentially_affected_workloads": "None detected",
         }
 
@@ -112,7 +124,19 @@ resource "aws_s3_account_public_access_block" "sentinel" {
                 "website_buckets": 1,
                 "finding_status": "CONFIRMED",
             },
-            "evidence": [],
+            "evidence": [
+                {
+                    "api_call": "s3control.get_public_access_block",
+                    "observed_value": {
+                        "BlockPublicAcls": False,
+                        "IgnorePublicAcls": False,
+                        "BlockPublicPolicy": False,
+                        "RestrictPublicBuckets": False,
+                    },
+                    "quality": "DIRECT",
+                    "purpose": "proof",
+                }
+            ],
             "potentially_affected_workloads": "MANAGER CONTEXT REQUIRED — public/website buckets may be intentional",
             "flags_hint": {"public_workload_dependency": True},
         }

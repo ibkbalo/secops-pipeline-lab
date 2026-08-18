@@ -501,6 +501,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         *,
         after_job_id: str | None = None,
         scan_report: dict | None = None,
+        after_scan_path: str | None = None,
     ) -> None:
         if not prior_jobs:
             return
@@ -536,6 +537,34 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         )
         if note:
             evidence_notes.append(note)
+        # Permanent casebook archive when clears are verified against an approved prior job.
+        # Pending jobs alone are not enough — remediation is usually approved before re-scan.
+        try:
+            import security_casebook
+
+            candidates = list(prior_jobs)
+            for jp in paths["jobs"].glob("job_*.json"):
+                try:
+                    pj = _read_json(jp)
+                except Exception:
+                    continue
+                if pj.get("role") != role_key:
+                    continue
+                if pj.get("status") not in {"approved", "partially_approved"}:
+                    continue
+                if any(c.get("job_id") == pj.get("job_id") for c in candidates):
+                    continue
+                candidates.append(pj)
+            for pj in candidates:
+                security_casebook.maybe_create_case_on_clear(
+                    workspace,
+                    before_job=pj,
+                    after_findings=new_findings,
+                    after_scan_path=after_scan_path,
+                    classification=security_casebook.CLASSIFICATION_LAB,
+                )
+        except Exception as exc:
+            errors.append(f"{role_key}: casebook:{exc}")
 
     for role_key in roles:
         try:
@@ -579,6 +608,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
                 prior,
                 findings_list,
                 scan_report=scan_report,
+                after_scan_path=str(scan_path),
             )
             # Clean (or no actionable findings): close stale pending jobs for this role.
             closed = _supersede_pending_for_role(
@@ -653,6 +683,7 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
             findings_list,
             after_job_id=job_id,
             scan_report=scan_report,
+            after_scan_path=str(scan_path),
         )
         job = {
             "job_id": job_id,

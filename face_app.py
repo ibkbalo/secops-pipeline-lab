@@ -17,7 +17,7 @@ import ai_brain_llm
 import compliance_map
 
 ROOT = Path(__file__).resolve().parent
-FACE_VERSION = "0.7.0-mm1"
+FACE_VERSION = "0.8.0-casebook"
 
 
 def _cloud_live_ready() -> bool:
@@ -227,6 +227,16 @@ def _dashboard_context():
         evidence_notes = []
         ciso_reports = []
 
+    try:
+        import security_casebook
+
+        security_casebook.ensure_iam_password_policy_case(ai_brain_agent.DEFAULT_WORKSPACE)
+        completed_cases = security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE)[:8]
+        completed_n = len(security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE))
+    except Exception:
+        completed_cases = []
+        completed_n = 0
+
     return {
         "face_version": FACE_VERSION,
         "brain_version": ai_brain_agent.VERSION,
@@ -254,6 +264,8 @@ def _dashboard_context():
         "fleet_risk_class": compliance.get("fleet_risk_class", "risk-low"),
         "evidence_notes": evidence_notes,
         "ciso_reports": ciso_reports,
+        "completed_cases": completed_cases,
+        "completed_n": completed_n,
     }
 
 
@@ -710,6 +722,115 @@ def download_ciso(report_id: str):
     if not md.is_file():
         abort(404)
     return send_file(md, as_attachment=True, download_name=md.name)
+
+
+@app.route("/completed")
+def completed_jobs():
+    import security_casebook
+
+    ws = ai_brain_agent.DEFAULT_WORKSPACE
+    try:
+        security_casebook.ensure_iam_password_policy_case(ws)
+    except Exception:
+        pass
+    cases = security_casebook.list_cases(ws)
+    filtered = security_casebook.filter_cases(
+        cases,
+        agent=request.args.get("agent") or None,
+        domain=request.args.get("domain") or None,
+        severity=request.args.get("severity") or None,
+        status=request.args.get("status") or None,
+        control_id=request.args.get("control") or request.args.get("finding") or None,
+        date_from=request.args.get("date_from") or None,
+        date_to=request.args.get("date_to") or None,
+        q=request.args.get("q") or None,
+    )
+    return render_template(
+        "face/completed_jobs.html",
+        face_version=FACE_VERSION,
+        cases=filtered,
+        total=len(cases),
+        filters={
+            "agent": request.args.get("agent") or "",
+            "domain": request.args.get("domain") or "",
+            "severity": request.args.get("severity") or "",
+            "status": request.args.get("status") or "",
+            "control": request.args.get("control") or request.args.get("finding") or "",
+            "date_from": request.args.get("date_from") or "",
+            "date_to": request.args.get("date_to") or "",
+            "q": request.args.get("q") or "",
+        },
+    )
+
+
+@app.route("/completed/<case_id>")
+def completed_case(case_id: str):
+    import security_casebook
+
+    case = security_casebook.load_case(ai_brain_agent.DEFAULT_WORKSPACE, case_id)
+    if not case:
+        abort(404)
+    return render_template(
+        "face/completed_case.html",
+        face_version=FACE_VERSION,
+        case=case,
+    )
+
+
+@app.route("/completed/<case_id>/download/<fmt>")
+def download_case_report(case_id: str, fmt: str):
+    import security_casebook
+
+    ws = ai_brain_agent.DEFAULT_WORKSPACE
+    case = security_casebook.load_case(ws, case_id)
+    if not case:
+        abort(404)
+    directory = security_casebook.case_dir(ws, case_id)
+    # Refresh exports so downloads stay available even if PDF was missing earlier.
+    security_casebook.write_case_exports(case, directory)
+    reports = directory / "reports"
+    mapping = {
+        "readme": (directory / "README.md", f"{case_id}_README.md", "text/markdown"),
+        "internal-md": (reports / "internal.md", f"{case_id}_internal.md", "text/markdown"),
+        "public-md": (reports / "public.md", f"{case_id}_public.md", "text/markdown"),
+        "internal-pdf": (reports / "internal.pdf", f"{case_id}_internal.pdf", "application/pdf"),
+        "public-pdf": (reports / "public.pdf", f"{case_id}_public.pdf", "application/pdf"),
+        "linkedin": (reports / "linkedin.txt", f"{case_id}_linkedin.txt", "text/plain"),
+        "interview": (reports / "interview.md", f"{case_id}_interview.md", "text/markdown"),
+        "portfolio": (reports / "portfolio_summary.txt", f"{case_id}_portfolio.txt", "text/plain"),
+    }
+    item = mapping.get(fmt)
+    if not item:
+        abort(404)
+    path, download_name, mime = item
+    if not path.is_file():
+        abort(404)
+    return send_file(path, as_attachment=True, download_name=download_name, mimetype=mime)
+
+
+@app.route("/api/cases/archive/<job_id>", methods=["POST"])
+def api_archive_case(job_id: str):
+    """Create a permanent case from an approved job + after-scan verification."""
+    import security_casebook
+
+    data = request.get_json(silent=True) or {}
+    after = data.get("after_scan_path") or request.args.get("after_scan_path")
+    classification = data.get("classification") or "LAB"
+    title = data.get("title")
+    try:
+        case = security_casebook.create_case_from_job(
+            ai_brain_agent.DEFAULT_WORKSPACE,
+            job_id,
+            after_scan_path=after,
+            classification=classification,
+            title=title,
+            intended_control_ids=data.get("intended_control_ids"),
+        )
+    except Exception as exc:
+        return jsonify({"status": "failed", "error": str(exc)}), 400
+    if request.accept_mimetypes.best == "application/json" or request.is_json:
+        return jsonify({"status": "ok", "case_id": case.get("case_id"), "case": case})
+    return redirect(url_for("completed_case", case_id=case.get("case_id")))
 
 
 @app.route("/api/alerts")

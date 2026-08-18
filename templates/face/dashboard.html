@@ -12,6 +12,7 @@
       <span class="posture-pill {{ posture_class }}">Risk {{ posture }}</span>
     </div>
     <div class="top-actions">
+      <a class="btn btn-ghost" href="{{ url_for('completed_jobs') }}">Completed Jobs{% if completed_n %} ({{ completed_n }}){% endif %}</a>
       <button class="btn btn-ghost" id="btn-brief" type="button">Refresh brief</button>
       <button class="btn btn-ghost" id="btn-ciso" type="button">CISO report</button>
       <button class="btn btn-primary" id="btn-cycle" type="button">Run AI cycle</button>
@@ -26,6 +27,7 @@
       <li>Inside each agent, open a <strong>job</strong> → review the kit → click <strong>Approve</strong> or <strong>Reject</strong>.</li>
       <li><strong>Findings</strong> come from the latest agent scan. Re-running a cycle replaces the previous open job for that agent (old jobs are marked superseded).</li>
       <li><strong>Fix evidence</strong> is written automatically when a re-scan clears findings. Use <strong>CISO report</strong> for an official posture pack anytime (auto-milestone when critical/high are gone).</li>
+      <li><strong>Completed Jobs</strong> keeps permanent case snapshots (audit / training / portfolio) so newer scans do not overwrite history.</li>
       <li><strong>Brain brief</strong> (right side) is the summary report — not where you approve.</li>
     </ol>
   </section>
@@ -63,6 +65,11 @@
       <div class="kpi-label">Approved</div>
       <div class="kpi-value">{{ approved_n }}</div>
       <div class="kpi-meta">plans accepted</div>
+    </article>
+    <article class="kpi kpi-findings">
+      <div class="kpi-label">Completed cases</div>
+      <div class="kpi-value">{{ completed_n }}</div>
+      <div class="kpi-meta"><a href="{{ url_for('completed_jobs') }}">open casebook</a></div>
     </article>
     <article class="kpi kpi-rejected">
       <div class="kpi-label">Rejected</div>

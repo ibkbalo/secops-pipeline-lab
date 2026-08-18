@@ -1,0 +1,62 @@
+{% extends "face/base.html" %}
+{% block title %}Completed Jobs · Sentinel Stacks{% endblock %}
+{% block body %}
+<main class="detail-wrap casebook">
+  <div class="casebook-nav">
+    <a class="btn btn-ghost" href="{{ url_for('dashboard') }}">Back to agents</a>
+    <span class="muted-note">Face {{ face_version }} · Security Casebook</span>
+  </div>
+
+  <header class="casebook-header">
+    <div class="eyebrow">Permanent archive · audit · training · portfolio</div>
+    <h1>Completed Jobs</h1>
+    <p class="tagline">
+      Verified remediations are snapshotted here so newer scans cannot overwrite the historical record.
+      Classification labels: LAB · CUSTOMER · INTERNAL · DEMO.
+    </p>
+  </header>
+
+  <form class="casebook-filters" method="get" action="{{ url_for('completed_jobs') }}">
+    <input type="search" name="q" placeholder="Search title / case / job" value="{{ filters.q }}" />
+    <input type="text" name="agent" placeholder="Agent" value="{{ filters.agent }}" />
+    <input type="text" name="domain" placeholder="Domain" value="{{ filters.domain }}" />
+    <input type="text" name="severity" placeholder="Severity" value="{{ filters.severity }}" />
+    <input type="text" name="status" placeholder="Status" value="{{ filters.status }}" />
+    <input type="text" name="control" placeholder="Finding / control ID" value="{{ filters.control }}" />
+    <input type="date" name="date_from" value="{{ filters.date_from }}" />
+    <input type="date" name="date_to" value="{{ filters.date_to }}" />
+    <button class="btn btn-primary" type="submit">Filter</button>
+    <a class="btn btn-ghost" href="{{ url_for('completed_jobs') }}">Clear</a>
+  </form>
+
+  <p class="muted-note">Showing {{ cases|length }} of {{ total }} case(s).</p>
+
+  {% if cases %}
+  <div class="case-grid">
+    {% for c in cases %}
+    <article class="case-card status-{{ (c.status or 'PARTIAL')|lower|replace(' ', '-') }}">
+      <div class="case-card-top">
+        <span class="mono case-id">{{ c.case_id }}</span>
+        <span class="chip {% if c.status == 'SUCCESS' %}chip-ok{% elif c.status == 'FAILED' %}chip-crit{% else %}chip-amber{% endif %}">{{ c.status }}</span>
+      </div>
+      <h2>{{ c.title }}</h2>
+      <p class="muted-note">{{ c.agent }} · {{ c.domain }} · {{ c.classification }}</p>
+      <ul class="case-meta">
+        <li><strong>{{ c.findings_remediated or (c.scan_delta.cleared_count if c.scan_delta else 0) }}</strong> controls cleared</li>
+        <li>Verification {% if c.verified %}✅{% else %}—{% endif %} {{ c.verification_result }}</li>
+        <li>{{ c.date }}</li>
+      </ul>
+      <div class="case-actions">
+        <a class="btn btn-signal" href="{{ url_for('completed_case', case_id=c.case_id) }}">View Case</a>
+        <a class="btn btn-ghost" href="{{ url_for('download_case_report', case_id=c.case_id, fmt='readme') }}">Download Report</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <section class="panel">
+    <p>No completed cases yet. Cases appear when a re-scan proves findings cleared after manager approval, or via archive.</p>
+  </section>
+  {% endif %}
+</main>
+{% endblock %}

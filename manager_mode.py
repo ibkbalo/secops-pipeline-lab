@@ -220,6 +220,126 @@ def _plain_title(finding: dict[str, Any]) -> str:
     return title or "Security issue"
 
 
+def _evidence_proof_block(impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> dict[str, Any] | None:
+    assessment = (ca or {}).get("evidence_assessment") or (impact or {}).get("evidence_assessment") or {}
+    # Prefer assessment; if missing, synthesize from labeled/raw evidence (DIRECT over INDIRECT)
+    raw_evidence = (
+        (assessment.get("labeled_evidence") if assessment else None)
+        or (ca or {}).get("evidence")
+        or (impact or {}).get("evidence")
+        or ((impact or {}).get("discovery") or {}).get("evidence")
+        or []
+    )
+    if not assessment and not raw_evidence:
+        return None
+
+    def _src(e: dict) -> str:
+        return str(e.get("api_call") or e.get("source") or "")
+
+    direct_items = [
+        e
+        for e in (assessment.get("labeled_evidence") or raw_evidence or [])
+        if str(e.get("quality") or "").upper() == "DIRECT"
+    ][:3]
+    if not direct_items and raw_evidence:
+        # Prefer password-policy / preferred live APIs over account summary
+        preferred_order = (
+            "list_analyzers",
+            "accessanalyzer",
+            "password_policy",
+            "get_public_access_block",
+            "describe_trails",
+            "describe_security_groups",
+            "get_account_summary",
+        )
+        ranked = sorted(
+            [e for e in raw_evidence if isinstance(e, dict)],
+            key=lambda e: next(
+                (i for i, token in enumerate(preferred_order) if token in _src(e).lower()),
+                99,
+            ),
+        )
+        if ranked and "get_account_summary" not in _src(ranked[0]).lower():
+            direct_items = ranked[:1]
+
+    indirect_items = [
+        e
+        for e in (assessment.get("labeled_evidence") or raw_evidence or [])
+        if str(e.get("quality") or "").upper() == "INDIRECT"
+        or (
+            not e.get("quality")
+            and "get_account_summary" in _src(e).lower()
+            and e not in direct_items
+        )
+    ][:3]
+
+    summary = (assessment or {}).get("manager_summary") or {}
+    quality = assessment.get("evidence_quality") or (
+        "DIRECT" if direct_items else ("INDIRECT" if indirect_items else "")
+    )
+    status = assessment.get("finding_status") or (impact or {}).get("finding_status") or ""
+    observed = summary.get("observed") if summary.get("observed") is not None else assessment.get("observed")
+    expected = summary.get("expected") if summary.get("expected") is not None else assessment.get("expected")
+    result = summary.get("result") or assessment.get("result")
+    source = summary.get("evidence_source") or assessment.get("evidence_source")
+    label = summary.get("human_label") or assessment.get("human_label") or "Control property"
+
+    if observed is None and direct_items:
+        observed = direct_items[0].get("observed_value")
+    if expected is None and direct_items:
+        expected = direct_items[0].get("expected_value")
+    if not source and direct_items:
+        source = _src(direct_items[0])
+
+    # Prefer human-readable observed when collectors provide it
+    if isinstance(observed, dict) and observed.get("human_observed"):
+        observed_fmt = str(observed.get("human_observed"))
+    else:
+        observed_fmt = None
+
+    def _fmt(val: Any) -> str:
+        if val is None:
+            return "—"
+        if isinstance(val, dict):
+            if val.get("human_observed"):
+                return str(val.get("human_observed"))
+            if len(val) == 1:
+                k, v = next(iter(val.items()))
+                return f"{k}: {v}"
+            return ", ".join(f"{k}: {v}" for k, v in val.items())
+        return str(val)
+
+    source_labels = {
+        "accessanalyzer.list_analyzers": "AWS IAM Access Analyzer",
+        "iam.get_account_password_policy": "AWS IAM password policy",
+        "iam.get_account_summary": "AWS IAM account summary",
+    }
+    source_display = source_labels.get(str(source or ""), source or "—")
+
+    insufficient = quality in {"INSUFFICIENT", "UNAVAILABLE"} or status == "UNVERIFIED"
+    return {
+        "insufficient": insufficient,
+        "headline": summary.get("headline")
+        or ("EVIDENCE INSUFFICIENT" if insufficient else "EVIDENCE"),
+        "message": summary.get("message")
+        or (
+            "The current evidence does not directly prove this security finding."
+            if insufficient
+            else assessment.get("reason")
+        ),
+        "quality": quality,
+        "finding_status": status,
+        "observed_label": label,
+        "observed": observed_fmt if observed_fmt is not None else _fmt(observed),
+        "expected": _fmt(expected),
+        "result": result or "—",
+        "evidence_source": source_display,
+        "evidence_source_raw": source or "—",
+        "direct_items": direct_items,
+        "indirect_items": indirect_items,
+    }
+
+
 def _what_found(finding: dict[str, Any], role: str) -> str:
     desc = str(finding.get("description") or "").strip()
     if desc:
@@ -281,6 +401,15 @@ def _why_matters(finding: dict[str, Any], impact: dict[str, Any] | None) -> str:
 
 
 def _what_change(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> str:
+    title_l = str(finding.get("title") or "").lower()
+    region = (
+        str(((finding.get("resource") or {}).get("region") or "")).strip()
+        or str(((impact or {}).get("region") or "")).strip()
+        or str((((impact or {}).get("discovery") or {}).get("region") or "")).strip()
+        or "us-east-1"
+    )
+    if "access analyzer" in title_l:
+        return f"Create an account-level IAM Access Analyzer in {region}."
     steps = (finding.get("remediation") or {}).get("steps") or []
     if steps:
         # Outcome-first: use first step as plain outcome when short
@@ -310,11 +439,23 @@ def _what_change(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dic
     return f"Remediate: {title}."
 
 
-def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> dict[str, Any]:
+def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None, finding: dict[str, Any] | None = None) -> dict[str, Any]:
     blast = (impact or {}).get("blast_radius") or (ca or {}).get("blast_radius") or {}
     scope = str(blast.get("scope") or (impact or {}).get("scope") or "UNKNOWN").replace("_", " ").title()
     level = str(blast.get("level") or "UNKNOWN")
+    title_l = str((finding or {}).get("title") or "").lower()
     workloads = (impact or {}).get("discovery", {}).get("potentially_affected_workloads") if impact else None
+    if "access analyzer" in title_l:
+        workloads = (
+            "Creates a monitoring/analyzer resource. It does not modify existing IAM "
+            "permissions or resource policies."
+        )
+        region = str(
+            (impact or {}).get("region")
+            or ((finding or {}).get("resource") or {}).get("region")
+            or ""
+        ).strip()
+        scope = f"Regional ({region})" if region else "Regional"
     if not workloads:
         workloads = "Not fully mapped — treat as unknown until confirmed."
     deps = (ca or {}).get("dependencies") or (impact or {}).get("dependencies") or []
@@ -328,11 +469,17 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None) ->
     if any(isinstance(d, dict) and str(d.get("confidence") or "").upper() == "LOW" for d in deps):
         unknowns.append("Some downstream dependencies are uncertain.")
     downtime = "No planned downtime indicated by analysis (still verify with owners)."
-    if level in {"HIGH", "CRITICAL"}:
+    if "access analyzer" in title_l:
+        downtime = "None expected for Access Analyzer enablement."
+    elif level in {"HIGH", "CRITICAL"}:
         downtime = "Possible service impact — coordinate with owners before applying."
-    potential = ""
     reasons = blast.get("reasons") or []
-    if reasons:
+    if "access analyzer" in title_l:
+        potential = (
+            "Creates a monitoring/analyzer resource. It does not modify existing IAM "
+            "permissions or resource policies."
+        )
+    elif reasons:
         potential = str(reasons[0])
     elif "public" in str(workloads).lower():
         potential = "Applications relying on intentionally public access may be affected."
@@ -341,12 +488,13 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None) ->
     return {
         "scope": scope,
         "blast_level": level,
+        "level": level,
         "potentially_affected": workloads if isinstance(workloads, str) else str(workloads),
         "expected_downtime": downtime,
         "known_dependencies": dep_names or ["None clearly identified"],
         "unknowns": unknowns or ["None flagged"],
         "potential_issue": potential,
-        "summary_line": f"Scope: {scope}. {potential}",
+        "summary_line": potential if "access analyzer" in title_l else f"Scope: {scope}. {potential}",
     }
 
 
@@ -373,7 +521,19 @@ def _why_recommend(
         return f"Human context is required because the system cannot decide alone: {q}"
 
     if rec == "RECOMMEND_REJECT":
-        detail = reasons[0] if reasons else "validation failed or a dangerous pattern was detected"
+        ready = _artifact_readiness_block(impact, ca)
+        # Never blame this finding on unrelated kit placeholders
+        if ready.get("has_placeholders"):
+            detail = "unresolved placeholders in this finding's remediation artifacts"
+        elif any("placeholder" in str(r).lower() for r in reasons) and not ready.get("has_placeholders"):
+            detail = reasons[0] if reasons and "placeholder" not in str(reasons[0]).lower() else (
+                "validation failed or a dangerous pattern was detected"
+            )
+            # Strip stale whole-kit placeholder reject copy
+            if "placeholder" in str(detail).lower():
+                detail = "validation failed or a dangerous pattern was detected"
+        else:
+            detail = reasons[0] if reasons else "validation failed or a dangerous pattern was detected"
         return f"The AI recommends not applying this change because {detail}."
 
     if rec == "RECOMMEND_APPROVE":
@@ -393,6 +553,17 @@ def _why_recommend(
 
 
 def _after_change(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> str:
+    title_l = str(finding.get("title") or "").lower()
+    region = (
+        str(((finding.get("resource") or {}).get("region") or "")).strip()
+        or str(((impact or {}).get("region") or "")).strip()
+        or "us-east-1"
+    )
+    if "access analyzer" in title_l:
+        return (
+            f"Re-query IAM Access Analyzer in {region} and confirm an ACTIVE ACCOUNT "
+            "analyzer exists, then re-scan so CLOUD-IAM-013 no longer fails."
+        )
     plan = (ca or {}).get("verification") or (impact or {}).get("verification") or {}
     steps = plan.get("steps") or []
     fid = finding.get("id") or "this finding"
@@ -407,6 +578,58 @@ def _after_change(finding: dict[str, Any], impact: dict[str, Any] | None, ca: di
     )
 
 
+def _artifact_readiness_block(impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> dict[str, Any]:
+    """Manager-facing relevant artifacts + placeholders for the finding under review."""
+    relevant = list(
+        (ca or {}).get("relevant_artifacts")
+        or (impact or {}).get("relevant_artifacts")
+        or []
+    )
+    # ONLY finding-scoped placeholders — never fall back to whole-kit terraform.placeholders
+    placeholders = list(
+        (ca or {}).get("relevant_placeholders")
+        or (impact or {}).get("relevant_placeholders")
+        or []
+    )
+    sibling = list(
+        (ca or {}).get("sibling_placeholder_artifacts")
+        or (impact or {}).get("sibling_placeholder_artifacts")
+        or []
+    )
+    scope = (ca or {}).get("artifact_scope") or (impact or {}).get("artifact_scope") or {}
+    # If scoped analysis exists, ignore any unscoped legacy terraform placeholder list
+    tf = (impact or {}).get("terraform") or {}
+    if not placeholders and not scope and not relevant:
+        # Legacy cache without scoping — do not surface whole-kit REPLACE_* as this finding's failure
+        placeholders = []
+    elif not placeholders and relevant:
+        # Keep empty: relevant artifacts were checked; NONE is correct
+        placeholders = []
+    unresolved = []
+    for p in placeholders:
+        if isinstance(p, dict):
+            token = p.get("token") or ""
+            path = p.get("file") or ""
+            unresolved.append(f"{token} in {path}" if path else str(token))
+        else:
+            unresolved.append(str(p))
+    # Prefer scoped paths; if missing, try terraform analysis files when scoped
+    if not relevant:
+        analysis_files = ((tf.get("validate") or {}) if isinstance(tf, dict) else {})
+        # no whole-kit listing
+        relevant = list(scope.get("paths") or [])
+    return {
+        "relevant_artifacts": relevant or ["—"],
+        "unresolved_placeholders": unresolved or ["NONE"],
+        "has_placeholders": bool(placeholders),
+        "sibling_placeholders": [
+            f"{s.get('token')} in {s.get('file')}" for s in sibling[:5] if isinstance(s, dict)
+        ],
+        "mapping": scope.get("mapping") or "",
+        "job_fully_approvable": (ca or {}).get("job_fully_approvable"),
+    }
+
+
 def _ai_checks(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> list[dict[str, Any]]:
     status = str((impact or {}).get("finding_status") or "UNKNOWN")
     val = str((ca or {}).get("validation_status") or ((impact or {}).get("terraform") or {}).get("validate", {}).get("status") or "UNKNOWN")
@@ -417,6 +640,7 @@ def _ai_checks(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[
     summary = disc.get("summary") or {}
     public_n = int(summary.get("public_buckets") or 0)
     answers = (impact or {}).get("assurance_answers") or {}
+    ready = _artifact_readiness_block(impact, ca)
     # change_assurance nested may not have assurance_answers; derive
     checks = [
         {
@@ -437,7 +661,26 @@ def _ai_checks(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[
             "ok": val == "PASS",
             "label": f"Validation: {val or 'UNKNOWN'}",
         },
+        {
+            "ok": not ready["has_placeholders"],
+            "label": (
+                "Unresolved placeholders: NONE"
+                if not ready["has_placeholders"]
+                else "Unresolved placeholders: " + "; ".join(ready["unresolved_placeholders"][:3])
+            ),
+        },
+        {
+            "ok": True,
+            "label": "Relevant remediation artifacts: " + ", ".join(str(x) for x in ready["relevant_artifacts"][:4]),
+        },
     ]
+    if ready.get("sibling_placeholders"):
+        checks.append(
+            {
+                "ok": False,
+                "label": "Other findings in this job still have placeholders (blocks whole-job approval)",
+            }
+        )
     if "STO" in str(finding.get("id") or "").upper() or summary:
         checks.append(
             {
@@ -551,10 +794,14 @@ def build_manager_card(
         "what_found": _what_found(finding, role),
         "why_matters": _why_matters(finding, impact if is_primary else None),
         "what_change": _what_change(finding, impact if is_primary else None, ca if is_primary else None),
-        "affect": _affect_summary(impact if is_primary else None, ca if is_primary else None),
+        "affect": _affect_summary(impact if is_primary else None, ca if is_primary else None, finding),
         "why_recommend": _why_recommend(finding, impact if is_primary else None, ca if is_primary else None),
         "after_change": _after_change(finding, impact if is_primary else None, ca if is_primary else None),
+        "evidence_proof": _evidence_proof_block(impact if is_primary else None, ca if is_primary else None)
+        if is_primary
+        else None,
         "ai_checks": _ai_checks(finding, impact if is_primary else None, ca if is_primary else None) if is_primary else [],
+        "artifact_readiness": _artifact_readiness_block(impact, ca) if is_primary else None,
         "recommendation_raw": raw_rec,
         "recommendation_label": translate_recommendation(raw_rec),
         "manager_decision": manager_decision_label(job),

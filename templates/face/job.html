@@ -76,6 +76,33 @@
         {% if primary.finding_id %}<p class="mm-secondary mono">Control ID: {{ primary.finding_id }}</p>{% endif %}
       </div>
 
+      {% set proof = primary.evidence_proof or {} %}
+      {% if proof %}
+      <div class="mm-q mm-evidence-proof {% if proof.insufficient %}mm-evidence-insufficient{% endif %}">
+        <h3>Supporting evidence</h3>
+        {% if proof.insufficient %}
+        <div class="mm-context" style="margin-top:0;">
+          <div class="mm-context-label">{{ proof.headline or "EVIDENCE INSUFFICIENT" }}</div>
+          <p>{{ proof.message }}</p>
+          <p><strong>Finding status:</strong> {{ proof.finding_status or "UNVERIFIED" }}</p>
+        </div>
+        {% else %}
+        <ul class="mm-affect-list">
+          <li><span>Observed</span> {{ proof.observed_label }}: {{ proof.observed }}</li>
+          <li><span>Expected</span> {{ proof.expected }}</li>
+          <li><span>Result</span> {{ proof.result }}</li>
+          <li><span>Evidence source</span> {{ proof.evidence_source }}</li>
+          <li><span>Evidence quality</span> {{ proof.quality or "DIRECT" }}</li>
+        </ul>
+        {% endif %}
+        {% if proof.indirect_items %}
+        <p class="mm-secondary">Also retained as context (INDIRECT — not proof):
+          {% for e in proof.indirect_items %}{{ e.api_call or e.source }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </p>
+        {% endif %}
+      </div>
+      {% endif %}
+
       <div class="mm-q">
         <h3>Why does it matter?</h3>
         <p>{{ primary.why_matters }}</p>
@@ -258,10 +285,23 @@
         <details open>
           <summary class="mono">Evidence</summary>
           <ul class="kit-files">
-            {% for ev in (ca.evidence or (impact.discovery.evidence if impact.discovery and impact.discovery.evidence else impact.evidence) or [])[:20] %}
-            <li class="mono">{{ ev.api_call or ev.source }} · {{ ev.resource_type or ev.source_type }} · {{ ev.observed_value }}</li>
+            {% set _ev_raw = (ca.evidence or (impact.discovery.evidence if impact.discovery and impact.discovery.evidence else impact.evidence) or []) %}
+            {% set _ev_direct = [] %}
+            {% set _ev_other = [] %}
+            {% for ev in _ev_raw %}
+              {% if (ev.quality or '')|upper == 'DIRECT' %}
+                {% if _ev_direct.append(ev) %}{% endif %}
+              {% else %}
+                {% if _ev_other.append(ev) %}{% endif %}
+              {% endif %}
+            {% endfor %}
+            {% for ev in (_ev_direct + _ev_other)[:20] %}
+            <li class="mono">{{ (ev.quality or '—')|upper }} · {{ ev.api_call or ev.source }} · {{ ev.resource_type or ev.source_type }} · {{ ev.observed_value }}</li>
             {% endfor %}
           </ul>
+          {% if proof and proof.indirect_items %}
+          <p class="muted-note">INDIRECT context is retained for account context only — it does not confirm the control.</p>
+          {% endif %}
         </details>
         {% endif %}
 
@@ -313,7 +353,7 @@
           {% if review.kit_exists %}
           <a class="btn btn-ghost" href="{{ url_for('download_kit', job_id=job.job_id) }}">Download kit ZIP</a>
           {% endif %}
-          <a class="btn btn-ghost" href="{{ url_for('job_detail', job_id=job.job_id, refresh_impact=1) }}">Refresh analysis</a>
+          <a class="btn btn-ghost" href="{{ url_for('job_detail', job_id=job.job_id, refresh_impact=1, finding=primary.finding_id) }}">Refresh analysis</a>
         </div>
 
         {# Legacy explain / compliance remain available here #}

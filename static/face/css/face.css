@@ -587,7 +587,7 @@ a { color: inherit; text-decoration: none; }
 /* KPI strip */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -1569,4 +1569,130 @@ strong.risk-low { color: var(--teal, #2dd4bf); }
   .job-actions { flex-direction: row; min-width: 0; }
   .role-bar-row { grid-template-columns: 1fr; gap: 4px; }
   .agent-metrics { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* —— Completed Jobs / Security Casebook —— */
+.casebook-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.casebook-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  margin: 6px 0 8px;
+}
+.casebook-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 16px 0 12px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.casebook-filters input {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+.case-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+.case-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.case-card h2 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  margin: 8px 0 4px;
+}
+.case-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+.case-id { color: var(--cyan); font-size: 0.85rem; }
+.case-meta {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.case-meta li { margin: 4px 0; }
+.case-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.case-id-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.case-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 18px;
+}
+.before-after {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.before-after h4 {
+  margin: 0 0 8px;
+  color: var(--cyan);
+  font-family: var(--font-display);
+}
+.before-after ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+.case-advanced {
+  margin-top: 10px;
+  padding: 10px;
+  background: var(--bg-2);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.case-pre {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: auto;
+}
+.case-quote {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--cyan);
+  background: var(--cyan-dim);
+  color: var(--text);
+  font-style: italic;
+}
+@media (max-width: 720px) {
+  .before-after { grid-template-columns: 1fr; }
 }

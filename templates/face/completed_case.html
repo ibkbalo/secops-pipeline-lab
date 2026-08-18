@@ -1,0 +1,181 @@
+{% extends "face/base.html" %}
+{% block title %}{{ case.case_id }} · {{ case.title }} · Sentinel Stacks{% endblock %}
+{% block body %}
+{% set n = case.narrative or {} %}
+{% set delta = case.scan_delta or {} %}
+{% set ba = case.before_after_summary or {} %}
+{% set interview = case.interview or {} %}
+{% set ex = case.execution or {} %}
+{% set ca = case.change_assurance_summary or {} %}
+<main class="detail-wrap casebook case-detail">
+  <div class="casebook-nav">
+    <a class="btn btn-ghost" href="{{ url_for('completed_jobs') }}">Completed Jobs</a>
+    <a class="btn btn-ghost" href="{{ url_for('dashboard') }}">Agents</a>
+  </div>
+
+  <article class="detail-card">
+    <div class="eyebrow">{{ case.classification }} · immutable snapshot · job {{ case.job_id }}</div>
+    <h1>{{ case.title }}</h1>
+    <div class="case-id-row">
+      <span class="mono">{{ case.case_id }}</span>
+      <span class="chip {% if case.status == 'SUCCESS' %}chip-ok{% elif case.status == 'FAILED' %}chip-crit{% else %}chip-amber{% endif %}">{{ case.status }}</span>
+      <span class="chip">{{ case.verification_result }}</span>
+    </div>
+    <p class="muted-note">{{ case.agent }} · {{ case.domain }} · {{ case.date }}</p>
+
+    <section class="mm-summary" aria-label="Case counts">
+      <div class="mm-summary-grid">
+        <div><strong>{{ (case.before or {}).findings_total or 0 }}</strong><span>original findings</span></div>
+        <div><strong>{{ case.findings_remediated or delta.cleared_count or 0 }}</strong><span>remediated</span></div>
+        <div><strong>{{ delta.remaining_count or (case.after or {}).findings_total or 0 }}</strong><span>remaining</span></div>
+        <div><strong>{{ case.findings_reviewed or 0 }}</strong><span>reviewed</span></div>
+      </div>
+    </section>
+
+    <section class="mm-q" aria-label="Execution record">
+      <h3>Remediation &amp; execution record</h3>
+      <ul class="mm-affect-list">
+        <li><span>Remediation artifact</span> {{ case.remediation_artifact_type or (ex.remediation_artifact_type) or 'n/a' }}</li>
+        <li><span>Execution method</span> {{ case.execution_method or ex.execution_method or 'n/a' }}</li>
+        <li><span>Executed by platform</span> {% if case.execution_performed_by_platform or ex.execution_performed_by_platform %}Yes{% else %}No{% endif %}</li>
+        <li><span>Verification</span> {{ case.verification_result }}</li>
+      </ul>
+    </section>
+
+    <div class="case-downloads">
+      <a class="btn btn-signal" href="{{ url_for('download_case_report', case_id=case.case_id, fmt='readme') }}">README.md</a>
+      <a class="btn btn-primary" href="{{ url_for('download_case_report', case_id=case.case_id, fmt='internal-pdf') }}">PDF — Internal</a>
+      <a class="btn btn-ghost" href="{{ url_for('download_case_report', case_id=case.case_id, fmt='public-pdf') }}">PDF — Public / Portfolio</a>
+      <a class="btn btn-ghost" href="{{ url_for('download_case_report', case_id=case.case_id, fmt='linkedin') }}">LinkedIn draft</a>
+      <a class="btn btn-ghost" href="{{ url_for('download_case_report', case_id=case.case_id, fmt='interview') }}">Interview prep</a>
+    </div>
+
+    <section class="mm-q">
+      <h3>What was found?</h3>
+      <p>{{ n.what_found }}</p>
+    </section>
+
+    <section class="mm-q">
+      <h3>Evidence</h3>
+      <p>Observed vs expected values are preserved on the historical finding snapshots (not the latest live job).</p>
+      <ul class="mm-affect-list">
+        {% for c in (delta.cleared or [])[:12] %}
+        <li><span>{{ c.id }}</span> {{ c.title }} — cleared on re-scan</li>
+        {% else %}
+        <li><span>Note</span> No controls cleared — success cannot be claimed.</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="mm-q">
+      <h3>Why did it matter?</h3>
+      <p>{{ n.why_mattered }}</p>
+    </section>
+
+    <section class="mm-q">
+      <h3>What remediation was approved?</h3>
+      <p>{{ n.remediation_approved }}</p>
+      <details class="case-advanced">
+        <summary>Advanced — technical artifact</summary>
+        <p class="mono muted-note">Kit: {{ (case.approved_artifact or {}).kit_path or 'n/a' }}</p>
+        <p>Manager decision (case scope): {{ case.manager_decision }}</p>
+        <p class="muted-note">Only controls in this remediation are listed (unrelated job approvals excluded).</p>
+        <pre class="case-pre">{{ case.finding_decisions | tojson(indent=2) }}</pre>
+        <p class="muted-note">Controls: {{ case.controls | join(', ') }}</p>
+      </details>
+    </section>
+
+    <section class="mm-q">
+      <h3>What could have been affected?</h3>
+      <p>{{ n.what_could_be_affected }}</p>
+      <ul class="mm-affect-list">
+        <li><span>Recommendation</span> {{ ca.recommendation or 'n/a' }}</li>
+        <li><span>Validation</span> {{ ca.validation_status or 'n/a' }}</li>
+        <li><span>Deployment ready</span> {{ ca.deployment_ready }}</li>
+      </ul>
+    </section>
+
+    <section class="mm-q">
+      <h3>What was actually changed?</h3>
+      <p>{{ n.what_changed }}</p>
+      <ul class="mm-affect-list">
+        <li><span>Remediation artifact</span> {{ case.remediation_artifact_type or ex.remediation_artifact_type }}</li>
+        <li><span>Execution method</span> {{ case.execution_method or ex.execution_method }}</li>
+        <li><span>Summary</span> {{ ex.method }}</li>
+        <li><span>Executed by platform</span> No</li>
+        <li><span>Authorized</span> {{ ex.authorized }}</li>
+      </ul>
+    </section>
+
+    <section class="mm-q">
+      <h3>How was it verified?</h3>
+      <p>{{ n.how_verified }}</p>
+    </section>
+
+    <section class="mm-q">
+      <h3>Before / After</h3>
+      <div class="before-after">
+        <div>
+          <h4>BEFORE</h4>
+          <ul>
+            {% for line in ba.before_lines or [] %}
+            <li>{{ line }}</li>
+            {% else %}
+            <li>{{ (case.before or {}).findings_total }} findings</li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <h4>AFTER</h4>
+          <ul>
+            {% for line in ba.after_lines or [] %}
+            <li>{{ line }}</li>
+            {% else %}
+            <li>{{ (case.after or {}).findings_total }} findings</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="mm-q">
+      <h3>Result</h3>
+      <p>{{ n.result }}</p>
+      <p><strong>Cleared:</strong>
+        {% for c in delta.cleared or [] %}
+        <span class="mono">{{ c.id }}</span>{% if not loop.last %}, {% endif %}
+        {% else %}none{% endfor %}
+      </p>
+      <p><strong>Remaining:</strong> {{ delta.remaining_count or 0 }} findings</p>
+    </section>
+
+    <section class="mm-q">
+      <h3>What did the engineer learn?</h3>
+      <p>{{ n.training_summary }}</p>
+    </section>
+
+    <section class="mm-q">
+      <h3>Explain this in an interview</h3>
+      <blockquote class="case-quote">{{ interview.paragraph }}</blockquote>
+      <details class="case-advanced">
+        <summary>STAR breakdown</summary>
+        <ul class="mm-affect-list">
+          <li><span>Situation</span> {{ interview.situation }}</li>
+          <li><span>Problem</span> {{ interview.security_problem }}</li>
+          <li><span>Investigation</span> {{ interview.investigation }}</li>
+          <li><span>Evidence</span> {{ interview.evidence }}</li>
+          <li><span>Remediation</span> {{ interview.remediation }}</li>
+          <li><span>Risk</span> {{ interview.risk_considered }}</li>
+          <li><span>Result</span> {{ interview.result }}</li>
+          <li><span>Lessons</span> {{ interview.lessons_learned }}</li>
+        </ul>
+      </details>
+    </section>
+
+    <section class="mm-q">
+      <h3>Portfolio summary</h3>
+      <pre class="case-pre">{{ case.portfolio_summary }}</pre>
+    </section>
+  </article>
+</main>
+{% endblock %}
