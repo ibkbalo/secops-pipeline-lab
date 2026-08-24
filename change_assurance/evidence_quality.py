@@ -30,7 +30,10 @@ class EvidenceSpec:
     control_key: str
     title_tokens: tuple[str, ...]  # all tokens must appear in title (lowercase)
     id_prefixes: tuple[str, ...] = ()
+    control_ids: tuple[str, ...] = ()  # exact finding IDs (highest precedence)
     preferred_sources: tuple[str, ...] = ()
+    incompatible_sources: tuple[str, ...] = ()  # never DIRECT proof for this control
+    aws_service: str = ""
     required_fields: tuple[str, ...] = ()
     operator: str = "=="  # >=, <=, ==, !=, truthy, falsy, all_true
     expected_value: Any = None
@@ -42,6 +45,9 @@ class EvidenceSpec:
     custom_eval: Callable[[dict[str, Any]], tuple[bool | None, str]] | None = field(
         default=None, compare=False, hash=False, repr=False
     )
+
+
+EVIDENCE_CONTROL_MISMATCH = "EVIDENCE_CONTROL_MISMATCH"
 
 
 def _lower(s: Any) -> str:
@@ -56,14 +62,56 @@ def match_spec(
 ) -> EvidenceSpec | None:
     fid = str(finding_id or "").upper()
     title_l = _lower(title)
+    # Exact control ID first (stable when packs assign fixed IDs)
+    for spec in specs:
+        if spec.control_ids and fid in {c.upper() for c in spec.control_ids}:
+            return spec
     # Prefer title-token match (stable across renumbered IDs)
     for spec in specs:
         if spec.title_tokens and all(t in title_l for t in spec.title_tokens):
             return spec
-    # Fall back to finding-id prefix families
+    # Fall back to finding-id prefix families (must not over-bind unrelated services)
     for spec in specs:
         if spec.id_prefixes and any(fid.startswith(p.upper()) for p in spec.id_prefixes):
             return spec
+    return None
+
+
+def evidence_control_mismatch_reason(
+    spec: EvidenceSpec | None,
+    api_call: str | None,
+) -> str | None:
+    """Reject cross-service evidence that must never prove this control."""
+    if not spec:
+        return None
+    source = _lower(api_call)
+    if not source:
+        return None
+    for bad in spec.incompatible_sources:
+        if _lower(bad) in source:
+            return (
+                f"{EVIDENCE_CONTROL_MISMATCH}: {spec.control_key} "
+                f"(service={spec.aws_service or 'n/a'}) cannot be proven by {api_call}"
+            )
+    preferred = [_lower(s) for s in spec.preferred_sources]
+    if preferred and not any(p in source for p in preferred):
+        # Known foreign logging/IAM APIs used as false proof
+        foreign = (
+            "cloudtrail.",
+            "iam.get_account_password_policy",
+            "iam.get_account_summary",
+            "accessanalyzer.",
+            "guardduty.",
+            "configservice.",
+            "config.",
+            "s3control.",
+            "ec2.describe_security_groups",
+        )
+        if any(f in source for f in foreign):
+            return (
+                f"{EVIDENCE_CONTROL_MISMATCH}: {spec.control_key} "
+                f"preferred {list(spec.preferred_sources)}; got {api_call}"
+            )
     return None
 
 
@@ -177,6 +225,11 @@ def classify_evidence_item(
     if not spec:
         return QUALITY_INDIRECT
     source = str(item.get("api_call") or item.get("source") or "").lower()
+    mismatch = evidence_control_mismatch_reason(spec, item.get("api_call") or item.get("source"))
+    if mismatch:
+        # Cross-service rows stay visible as context, never as DIRECT proof.
+        item["mismatch_reason"] = mismatch
+        return QUALITY_INDIRECT
     preferred = [s.lower() for s in spec.preferred_sources]
     has_fields = True
     for f in spec.required_fields:
@@ -194,8 +247,8 @@ def classify_evidence_item(
     if preferred and any(p in source for p in preferred) and has_fields:
         return QUALITY_DIRECT
     if has_fields and preferred and not any(p in source for p in preferred):
-        # field present but wrong/weak source — still can be direct if field is authoritative
-        return QUALITY_DIRECT
+        # Wrong AWS service / API — never elevate to DIRECT.
+        return QUALITY_INDIRECT
     if preferred and any(p in source for p in preferred) and not has_fields:
         return QUALITY_INSUFFICIENT
     if source:
@@ -362,16 +415,25 @@ def assess_finding_evidence(
         }
 
     if not direct_items:
+        mismatch_reasons = [
+            str(r.get("mismatch_reason"))
+            for r in labeled
+            if r.get("mismatch_reason")
+        ]
+        reason = (
+            "No DIRECT evidence for required field(s): "
+            + ", ".join(spec.required_fields)
+            + f" from preferred source(s): {', '.join(spec.preferred_sources) or 'n/a'}"
+        )
+        if mismatch_reasons:
+            reason = mismatch_reasons[0] + " — " + reason
         return {
             "version": VERSION,
             "finding_status": STATUS_UNVERIFIED,
             "evidence_quality": QUALITY_INSUFFICIENT if evidence else QUALITY_UNAVAILABLE,
             "control_key": spec.control_key,
-            "reason": (
-                "No DIRECT evidence for required field(s): "
-                + ", ".join(spec.required_fields)
-                + f" from preferred source(s): {', '.join(spec.preferred_sources) or 'n/a'}"
-            ),
+            "reason": reason,
+            "evidence_control_mismatch": bool(mismatch_reasons),
             "observed": None,
             "expected": spec.human_expected or spec.expected_value,
             "result": "UNVERIFIED",
@@ -383,7 +445,11 @@ def assess_finding_evidence(
             "labeled_evidence": labeled,
             "manager_summary": {
                 "headline": "EVIDENCE INSUFFICIENT",
-                "message": "The current evidence does not directly prove this security finding.",
+                "message": (
+                    "Cross-service evidence cannot prove this control."
+                    if mismatch_reasons
+                    else "The current evidence does not directly prove this security finding."
+                ),
                 "observed": None,
                 "expected": spec.human_expected or str(spec.expected_value),
                 "result": "UNVERIFIED",

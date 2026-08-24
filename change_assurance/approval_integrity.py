@@ -15,6 +15,11 @@ VERSION = "0.2.0-p3"
 INVALIDATION_REASONS = (
     "ARTIFACT_CHANGED",
     "PLAN_CHANGED",
+    "SOURCE_ARTIFACT_CHANGED",
+    "ACCOUNT_MISMATCH",
+    "REGION_MISMATCH",
+    "EXECUTION_ROLE_CHANGED",
+    "PARTIAL_EXECUTION_CHANGED_STATE",
     "TARGET_CHANGED",
     "ENVIRONMENT_CHANGED",
     "ASSURANCE_REPORT_CHANGED",
@@ -47,6 +52,13 @@ def _change_hash(artifacts: list[dict]) -> str:
 def _plan_hashes(artifacts: list[dict]) -> dict[str, str | None]:
     out: dict[str, str | None] = {
         "terraform_plan_hash": None,
+        "saved_plan_sha256": None,
+        "source_artifact_sha256": None,
+        "plan_account_id": None,
+        "plan_region": None,
+        "execution_role": None,
+        "execution_identity": None,
+        "saved_plan_path": None,
         "git_diff_hash": None,
         "configuration_diff_hash": None,
         "policy_diff_hash": None,
@@ -57,11 +69,40 @@ def _plan_hashes(artifacts: list[dict]) -> dict[str, str | None]:
         meta = a.get("meta") or {}
         val = a.get("validation") or {}
         analysis = val.get("analysis") or {}
+        reviewed = analysis.get("reviewed_plan") or (analysis.get("plan") or {}).get("reviewed_plan")
         atype = str(a.get("artifact_type") or "")
         if atype == "terraform":
-            ph = stable_hash(analysis.get("plan") or a.get("proposed_changes") or {})
-            out["terraform_plan_hash"] = ph
-            plan_parts.append(ph)
+            if isinstance(reviewed, dict) and reviewed.get("plan_content_hash"):
+                ph = str(reviewed["plan_content_hash"])
+                out["terraform_plan_hash"] = ph
+                out["saved_plan_sha256"] = reviewed.get("saved_plan_sha256") or meta.get("saved_plan_sha256")
+                out["source_artifact_sha256"] = (
+                    reviewed.get("source_artifact_sha256") or meta.get("source_artifact_sha256")
+                )
+                out["plan_account_id"] = reviewed.get("account_id") or meta.get("plan_account_id")
+                out["plan_region"] = reviewed.get("region") or meta.get("plan_region")
+                out["execution_role"] = reviewed.get("execution_role") or meta.get("execution_role")
+                out["execution_identity"] = (
+                    reviewed.get("execution_identity") or meta.get("execution_identity")
+                )
+                out["saved_plan_path"] = reviewed.get("saved_plan_path") or meta.get("saved_plan_path")
+                plan_parts.append(ph)
+                if out["saved_plan_sha256"]:
+                    plan_parts.append(str(out["saved_plan_sha256"]))
+                if out["execution_role"]:
+                    plan_parts.append(f"role:{out['execution_role']}")
+            else:
+                ph = meta.get("plan_hash") or stable_hash(analysis.get("plan") or a.get("proposed_changes") or {})
+                out["terraform_plan_hash"] = ph
+                plan_parts.append(ph)
+            if meta.get("source_artifact_sha256") and not out["source_artifact_sha256"]:
+                out["source_artifact_sha256"] = meta.get("source_artifact_sha256")
+            if meta.get("execution_role") and not out["execution_role"]:
+                out["execution_role"] = meta.get("execution_role")
+            if meta.get("execution_identity") and not out["execution_identity"]:
+                out["execution_identity"] = meta.get("execution_identity")
+            if meta.get("saved_plan_path") and not out["saved_plan_path"]:
+                out["saved_plan_path"] = meta.get("saved_plan_path")
         if meta.get("git_diff_hash"):
             out["git_diff_hash"] = meta.get("git_diff_hash")
             plan_parts.append(meta.get("git_diff_hash"))
@@ -191,6 +232,35 @@ def validate_approval_binding(
         reasons.append("ARTIFACT_CHANGED")
     if binding.get("plan_or_diff_hash") != current.get("plan_or_diff_hash"):
         reasons.append("PLAN_CHANGED")
+    if binding.get("terraform_plan_hash") and binding.get("terraform_plan_hash") != current.get(
+        "terraform_plan_hash"
+    ):
+        reasons.append("PLAN_CHANGED")
+    if binding.get("saved_plan_sha256") and binding.get("saved_plan_sha256") != current.get(
+        "saved_plan_sha256"
+    ):
+        reasons.append("PLAN_CHANGED")
+    if binding.get("source_artifact_sha256") and binding.get("source_artifact_sha256") != current.get(
+        "source_artifact_sha256"
+    ):
+        reasons.append("SOURCE_ARTIFACT_CHANGED")
+        reasons.append("ARTIFACT_CHANGED")
+    if binding.get("plan_account_id") and current.get("plan_account_id"):
+        if str(binding.get("plan_account_id")) != str(current.get("plan_account_id")):
+            reasons.append("ACCOUNT_MISMATCH")
+            reasons.append("TARGET_CHANGED")
+    if binding.get("plan_region") and current.get("plan_region"):
+        if str(binding.get("plan_region")).lower() != str(current.get("plan_region")).lower():
+            reasons.append("REGION_MISMATCH")
+            reasons.append("TARGET_CHANGED")
+    if binding.get("execution_role") and current.get("execution_role"):
+        if str(binding.get("execution_role")) != str(current.get("execution_role")):
+            reasons.append("EXECUTION_ROLE_CHANGED")
+            reasons.append("TARGET_CHANGED")
+    if binding.get("execution_identity") and current.get("execution_identity"):
+        if str(binding.get("execution_identity")) != str(current.get("execution_identity")):
+            reasons.append("EXECUTION_ROLE_CHANGED")
+            reasons.append("TARGET_CHANGED")
     if binding.get("git_diff_hash") and binding.get("git_diff_hash") != current.get("git_diff_hash"):
         reasons.append("DIFF_CHANGED")
     if (binding.get("target_environment") or None) != (target_environment or None):

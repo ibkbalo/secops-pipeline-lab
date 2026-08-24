@@ -103,6 +103,61 @@
       </div>
       {% endif %}
 
+      {% set understand = primary.understanding or {} %}
+      {% if understand.available and understand.safe_to_present %}
+      <div class="mm-q mm-understand">
+        <h3>Understand this finding</h3>
+        <div class="mm-understand-body">
+          <p><strong>What is this?</strong><br>{{ understand.what_is_this }}</p>
+          <p><strong>What did Sentinel find in your environment?</strong><br>{{ understand.what_sentinel_found }}</p>
+          <p><strong>What does that mean?</strong><br>{{ understand.what_it_means }}</p>
+          <p><strong>Why should I care?</strong><br>{{ understand.why_care }}</p>
+          <p><strong>What could realistically happen?</strong><br>{{ understand.realistic_example }}</p>
+          {% if understand.absence_does_not_prove %}
+          <p class="mm-secondary"><strong>Important:</strong> {{ understand.absence_does_not_prove }}</p>
+          {% endif %}
+          <p><strong>Why is this rated {{ understand.severity.rating if understand.severity else primary.security_severity }}?</strong><br>
+            {{ understand.severity.label if understand.severity else ("Sentinel severity: " ~ (primary.security_severity or "")) }}
+          </p>
+          {% if understand.severity and understand.severity.basis %}
+          <ul class="mm-affect-list">
+            {% for b in understand.severity.basis %}
+            <li><span>Basis</span> {{ b }}</li>
+            {% endfor %}
+            {% for c in understand.severity.context or [] %}
+            <li><span>Context</span> {{ c }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <p><strong>What will the fix do?</strong><br>{{ understand.fix_will_do }}</p>
+          {% if understand.fix_will_not_do %}
+          <p><strong>What will the fix NOT do?</strong></p>
+          <ul>
+            {% for item in understand.fix_will_not_do %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if understand.manager_prechecks %}
+          <p><strong>What should I check before approving?</strong></p>
+          <ul>
+            {% for item in understand.manager_prechecks %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <p><strong>How will we know it worked?</strong><br>{{ understand.how_we_verify }}</p>
+        </div>
+      </div>
+      {% elif understand.errors %}
+      <div class="mm-context">
+        <div class="mm-context-label">EXPLANATION NEEDS REVIEW</div>
+        {% for err in understand.errors[:3] %}
+        <p class="mono">{{ err }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+
       <div class="mm-q">
         <h3>Why does it matter?</h3>
         <p>{{ primary.why_matters }}</p>
@@ -111,18 +166,44 @@
       <div class="mm-q">
         <h3>What does the AI want to change?</h3>
         <p>{{ primary.what_change }}</p>
+        {% if understand.fix_will_not_do %}
+        <p class="mm-secondary"><strong>Will not:</strong> {{ understand.fix_will_not_do|join('; ') }}</p>
+        {% endif %}
       </div>
 
       <div class="mm-q">
         <h3>What could this affect or break?</h3>
         <p>{{ affect.summary_line or primary.what_change }}</p>
+        {% if affect.plan_reviewed and affect.detail_lines %}
+        <pre class="mono mm-pre" style="white-space:pre-wrap;">{{ affect.detail_lines|join('\n') }}</pre>
+        {% endif %}
         <ul class="mm-affect-list">
           <li><span>Scope</span> {{ affect.scope or "—" }}</li>
-          <li><span>Potentially affected systems</span> {{ affect.potentially_affected or "—" }}</li>
+          {% if affect.plan_create is defined and affect.plan_create is not none %}
+          <li><span>Terraform plan</span> {{ affect.plan_create }} CREATE · {{ affect.plan_modify or 0 }} CHANGE · {{ affect.plan_destroy or 0 }} DESTROY</li>
+          {% endif %}
+          {% if affect.resources_to_create %}
+          <li><span>Resources to be created</span>
+            <ul>{% for r in affect.resources_to_create %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+          </li>
+          {% endif %}
+          {% if affect.resources_modified %}
+          <li><span>Existing resources modified</span> {{ affect.resources_modified|join(', ') }}</li>
+          {% endif %}
+          {% if affect.resources_destroyed %}
+          <li><span>Existing resources destroyed</span> {{ affect.resources_destroyed|join(', ') }}</li>
+          {% endif %}
+          {% if affect.cloudtrail_bucket %}
+          <li><span>Existing CloudTrail bucket</span> {{ affect.cloudtrail_bucket }}</li>
+          {% endif %}
+          <li><span>Potentially affected systems</span> {% if affect.plan_reviewed %}See plan-scoped resources above{% else %}{{ affect.potentially_affected or "—" }}{% endif %}</li>
           <li><span>Expected downtime</span> {{ affect.expected_downtime or "—" }}</li>
-          <li><span>Known dependencies</span> {{ (affect.known_dependencies or [])|join(', ') or "—" }}</li>
-          <li><span>Unknowns</span> {{ (affect.unknowns or [])|join('; ') or "—" }}</li>
+          <li><span>Known dependencies</span> {{ (affect.known_dependencies or [])|join('; ') or "—" }}</li>
+          <li><span>Apply-time considerations / unknowns</span> {{ (affect.unknowns or [])|join('; ') or "—" }}</li>
         </ul>
+        {% if affect.risk_rationale %}
+        <p class="mm-secondary"><strong>Risk rationale:</strong> {{ affect.risk_rationale }}</p>
+        {% endif %}
       </div>
 
       <div class="mm-q">
@@ -145,6 +226,67 @@
       </div>
       {% endif %}
 
+      {% if primary.artifact_readiness and primary.artifact_readiness.remediation_status in ["PREREQUISITES_RESOLVED", "RECOVERY_REQUIRED"] %}
+      <div class="mm-checks">
+        <div class="engine-label">Prerequisite decision</div>
+        <ul>
+          <li class="ok">✓ CREATE DEDICATED RESOURCES</li>
+          <li class="ok">✓ Unresolved placeholders: {{ (primary.artifact_readiness.unresolved_placeholders or ["NONE"])|join(', ') }}</li>
+          <li class="ok">✓ Remediation status: {{ primary.artifact_readiness.remediation_status }}</li>
+          {% if primary.artifact_readiness.remediation_lifecycle_state %}
+          <li class="warn">• Remediation lifecycle: {{ primary.artifact_readiness.remediation_lifecycle_state }}</li>
+          {% endif %}
+          {% for ex in primary.artifact_readiness.prerequisite_existence or [] %}
+          <li class="{% if ex.status == 'EXISTS' %}ok{% else %}warn{% endif %}">
+            {% if ex.status == 'EXISTS' %}✓{% else %}•{% endif %}
+            Prerequisite {{ ex.label }}: {{ ex.status }}{% if ex.evidence_quality %} ({{ ex.evidence_quality }}{% if ex.evidence_source %} via {{ ex.evidence_source }}{% endif %}){% endif %}
+            {% if ex.identity %}<span class="mono"> — {{ ex.identity }}</span>{% endif %}
+          </li>
+          {% endfor %}
+          {% if primary.artifact_readiness.remediation_status != "RECOVERY_REQUIRED" %}
+          <li class="warn">• Execution: NOT PERFORMED (validate → plan → approve → human apply)</li>
+          {% endif %}
+          {% if primary.artifact_readiness.already_created %}
+          <li class="ok">✓ ALREADY CREATED DURING PRIOR PARTIAL EXECUTION:
+            <ul>{% for r in primary.artifact_readiness.already_created %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+          </li>
+          {% endif %}
+          {% if primary.artifact_readiness.will_create %}
+          <li class="ok">✓ CURRENT RECOVERY PLAN WILL CREATE:
+            <ul>{% for r in primary.artifact_readiness.will_create %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+          </li>
+          {% elif primary.artifact_readiness.prepare %}
+          {% for item in primary.artifact_readiness.prepare or [] %}
+          <li class="ok">✓ Sentinel will prepare: {{ item }}</li>
+          {% endfor %}
+          {% endif %}
+          {% if primary.artifact_readiness.cost_note %}
+          <li class="warn">• Cost note: {{ primary.artifact_readiness.cost_note }}</li>
+          {% endif %}
+          {% if primary.artifact_readiness.what_will_change %}
+          <li>• What will change? {{ primary.artifact_readiness.what_will_change }}</li>
+          {% endif %}
+          {% for skip in primary.artifact_readiness.what_will_not_change or [] %}
+          <li>• What will NOT change: {{ skip }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% elif primary.artifact_readiness and primary.artifact_readiness.has_placeholders %}
+      <div class="mm-checks">
+        <div class="engine-label">Remediation prerequisites</div>
+        <ul>
+          <li class="warn">• Remediation status: {{ primary.artifact_readiness.remediation_status or "PREREQUISITES_REQUIRED" }}</li>
+          <li class="warn">• Unresolved placeholders: PRESENT</li>
+          {% for lab in primary.artifact_readiness.missing_prerequisite_labels or [] %}
+          <li class="warn">• Missing: {{ lab }}</li>
+          {% endfor %}
+          {% if primary.artifact_readiness.manager_decision_prompt %}
+          <li class="warn">• What must the manager decide? {{ primary.artifact_readiness.manager_decision_prompt }}</li>
+          {% endif %}
+        </ul>
+      </div>
+      {% endif %}
+
       {% if primary.ai_checks %}
       <div class="mm-checks">
         <div class="engine-label">AI checks</div>
@@ -156,19 +298,113 @@
       </div>
       {% endif %}
 
+      {% if primary.finding_execution %}
+      <div class="mm-checks">
+        <div class="engine-label">Execution history</div>
+        <ul>
+          <li class="warn">• Execution status: {{ primary.finding_execution.execution_status or primary.execution }}</li>
+          <li class="warn">• Previous execution: {{ primary.finding_execution.previous_execution or "FAILED AFTER PARTIAL SUCCESS" }}</li>
+          {% if primary.finding_execution.succeeded_resources %}
+          <li class="ok">✓ Resources successfully created:
+            <ul>{% for r in primary.finding_execution.succeeded_resources %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+          </li>
+          {% endif %}
+          {% if primary.finding_execution.latest_attempt and primary.finding_execution.latest_attempt.failure_reason %}
+          <li class="warn">• Failure: {{ primary.finding_execution.latest_attempt.failure_reason }}{% if primary.finding_execution.latest_attempt.failed_action %} ({{ primary.finding_execution.latest_attempt.failed_action }}){% endif %}</li>
+          {% endif %}
+          {% if primary.finding_execution.recovery_plan_summary %}
+          <li>• Current recovery plan: {{ primary.finding_execution.recovery_plan_summary.create or 0 }} CREATE · {{ primary.finding_execution.recovery_plan_summary.modify or 0 }} CHANGE · {{ primary.finding_execution.recovery_plan_summary.destroy or 0 }} DESTROY</li>
+          {% endif %}
+          {% if primary.finding_execution.recovery_plan_status == "PLAN_REGENERATION_REQUIRED" or primary.finding_execution.recovery_plan_superseded %}
+          <li class="warn">• Recovery plan status: PLAN REGENERATION REQUIRED (prior plan superseded — not executable)</li>
+          {% if primary.finding_execution.prior_recovery_plan_path %}
+          <li class="warn">• Prior recovery plan (audit only): <span class="mono">{{ primary.finding_execution.prior_recovery_plan_path }}</span></li>
+          {% endif %}
+          {% if primary.finding_execution.prior_recovery_plan_sha256 %}
+          <li class="warn">• Prior recovery plan SHA: <span class="mono">{{ primary.finding_execution.prior_recovery_plan_sha256 }}</span></li>
+          {% endif %}
+          {% if primary.finding_execution.recovery_plan_superseded_reason %}
+          <li class="warn">• Supersession reason: {{ primary.finding_execution.recovery_plan_superseded_reason }}</li>
+          {% endif %}
+          {% elif primary.finding_execution.prior_recovery_plan_superseded or primary.finding_execution.prior_recovery_plan_sha256 %}
+          <li class="warn">• Prior recovery plan superseded (audit only){% if primary.finding_execution.prior_recovery_plan_sha256 %}: <span class="mono">{{ primary.finding_execution.prior_recovery_plan_sha256 }}</span>{% endif %}</li>
+          {% if primary.finding_execution.prior_recovery_plan_superseded_reason %}
+          <li class="warn">• Prior supersession reason: {{ primary.finding_execution.prior_recovery_plan_superseded_reason }}</li>
+          {% endif %}
+          {% endif %}
+          {% if primary.finding_execution.recovery_plan_sha256 and primary.finding_execution.recovery_plan_status == "CURRENT" %}
+          <li class="ok">✓ Current recovery plan SHA: <span class="mono">{{ primary.finding_execution.recovery_plan_sha256 }}</span></li>
+          {% endif %}
+          {% if primary.source_artifact_sha256 %}
+          <li class="ok">✓ Source artifact SHA: <span class="mono">{{ primary.source_artifact_sha256 }}</span></li>
+          {% endif %}
+          {% if primary.finding_execution.recovery_resources %}
+          <li>• Resources remaining:
+            <ul>{% for r in primary.finding_execution.recovery_resources %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+          </li>
+          {% endif %}
+          <li class="warn">• Prior approval valid for recovery: {{ "NO" if primary.finding_execution.prior_approval_valid == false else "—" }}</li>
+        </ul>
+      </div>
+      {% endif %}
+
+          {% if primary.predicted_secondary_findings or primary.cross_control_impact or primary.cross_control_note %}
+      <div class="mm-checks">
+        <div class="engine-label">Cross-control impact / Predicted secondary findings</div>
+        <ul>
+          {% if primary.cross_control_note %}
+          <li class="ok">✓ {{ primary.cross_control_note }}</li>
+          {% endif %}
+          {% if primary.remediation_fully_hardened == false %}
+          <li class="warn">• This remediation is NOT fully hardened against other Sentinel controls.</li>
+          {% elif primary.remediation_fully_hardened %}
+          <li class="ok">✓ No blocking cross-control conflicts predicted from registered adapters.</li>
+          {% endif %}
+          {% if primary.cross_control_impact and primary.cross_control_impact.summary_line %}
+          <li>• {{ primary.cross_control_impact.summary_line }}</li>
+          {% endif %}
+          {% for p in primary.predicted_secondary_findings or [] %}
+          <li class="{% if p.would_fail_after_apply and p.applicability == 'REQUIRED' %}warn{% else %}ok{% endif %}">
+            {% if p.would_fail_after_apply and p.applicability == 'REQUIRED' %}•{% else %}✓{% endif %}
+            {{ p.title }} — {{ p.applicability }}{% if p.severity %} ({{ p.severity }}){% endif %}
+            <div class="mm-secondary">{{ p.manager_message }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+
       <div class="mm-decision-row">
         <div class="mm-metric">
-          <span class="mm-metric-label">Security Severity</span>
+          <span class="mm-metric-label">Sentinel Severity</span>
           <span class="mm-metric-value sev-text-{{ (primary.security_severity or 'info')|lower }}">{{ primary.security_severity or "—" }}</span>
         </div>
+        {% if understand.severity and understand.severity.source %}
+        <div class="mm-metric">
+          <span class="mm-metric-label">Severity basis</span>
+          <span class="mm-metric-value" style="font-size:0.85rem;">{{ understand.severity.source }}</span>
+        </div>
+        {% endif %}
         <div class="mm-metric">
           <span class="mm-metric-label">Risk of Applying Fix</span>
           <span class="mm-metric-value risk-{{ (primary.change_risk or 'unknown')|lower }}">{{ primary.change_risk or "—" }}</span>
         </div>
+        {% if affect.risk_rationale or primary.change_risk_rationale %}
+        <div class="mm-metric" style="flex:1 1 100%;">
+          <span class="mm-metric-label">Risk rationale</span>
+          <span class="mm-metric-value" style="font-size:0.85rem;font-weight:500;">{{ affect.risk_rationale or primary.change_risk_rationale }}</span>
+        </div>
+        {% endif %}
         <div class="mm-metric">
           <span class="mm-metric-label">AI Recommendation</span>
           <span class="mm-metric-value">{{ primary.recommendation_label or "REVIEW WITH MANAGER" }}</span>
         </div>
+        {% if primary.artifact_readiness and primary.artifact_readiness.remediation_status %}
+        <div class="mm-metric">
+          <span class="mm-metric-label">Remediation status</span>
+          <span class="mm-metric-value">{{ primary.artifact_readiness.remediation_status }}</span>
+        </div>
+        {% endif %}
         <div class="mm-metric">
           <span class="mm-metric-label">Manager Decision</span>
           <span class="mm-metric-value">{{ primary.manager_decision or mm.manager_decision or "PENDING" }}</span>
@@ -254,6 +490,18 @@
           <span class="chip">Remediation risk: {{ ((ca.remediation_risk or impact.remediation_risk) or {}).level or "—" }}</span>
           <span class="chip">Integrity: {{ integ.integrity or appr.status or "—" }}</span>
         </div>
+
+        {% set _ar = primary.artifact_readiness or {} %}
+        {% set _res = ca.prerequisite_resolution or impact.prerequisite_resolution or {} %}
+        <h4>Persisted artifact binding</h4>
+        <ul class="kit-files">
+          <li class="mono">Kit generation ID: {{ _ar.kit_generation_id or job.kit_generation_id or _res.kit_generation_id or "—" }}</li>
+          <li class="mono">Kit path: {{ _ar.kit_path or job.kit_path or _res.kit_path or "—" }}</li>
+          <li class="mono">Artifact path: {{ _ar.artifact_path or _res.artifact_path or "—" }}</li>
+          <li class="mono">Artifact SHA-256: {{ _ar.artifact_sha256 or _res.artifact_sha256 or "—" }}</li>
+          <li class="mono">Artifact generated_at: {{ _ar.artifact_generated_at or _res.artifact_generated_at or "—" }}</li>
+          <li class="mono">Persistence verified: {{ _ar.persistence_verified if _ar.persistence_verified is defined else _res.persistence_verified }}</li>
+        </ul>
 
         {% if appr.technical_reasons %}
         <p class="mono">Integrity reason codes: {{ appr.technical_reasons|join(', ') }}</p>

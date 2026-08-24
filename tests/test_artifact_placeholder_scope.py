@@ -63,9 +63,9 @@ def test_01_clean_finding_a_not_rejected_by_finding_b_placeholder(tmp_path: Path
         tmp_path,
         {
             "terraform/aws_iam_account_password_policy.tf": PASSWORD_TF,
-            "terraform/CLOUD-LOG-003.tf": DIRTY_LOG_TF,
+            "terraform/CLOUD-LOG-002.tf": DIRTY_LOG_TF,
             "runbooks/CLOUD-IAM-001.yml": "title: password\n",
-            "runbooks/CLOUD-LOG-003.yml": "title: config\n",
+            "runbooks/CLOUD-LOG-002.yml": "title: config\n",
         },
         manifest_items=[
             {
@@ -77,9 +77,9 @@ def test_01_clean_finding_a_not_rejected_by_finding_b_placeholder(tmp_path: Path
                 ],
             },
             {
-                "check_id": "CLOUD-LOG-003",
+                "check_id": "CLOUD-LOG-002",
                 "status": "mapped",
-                "files": ["terraform/CLOUD-LOG-003.tf", "runbooks/CLOUD-LOG-003.yml"],
+                "files": ["terraform/CLOUD-LOG-002.tf", "runbooks/CLOUD-LOG-002.yml"],
             },
         ],
     )
@@ -87,7 +87,7 @@ def test_01_clean_finding_a_not_rejected_by_finding_b_placeholder(tmp_path: Path
     assert a["flags"]["placeholder_unresolved"] is False
     assert a["validate"]["status"] == "PASS"
     assert any("password_policy" in f for f in a["files"])
-    assert not any("CLOUD-LOG-003" in f for f in a["files"])
+    assert not any("CLOUD-LOG-002" in f for f in a["files"])
 
 
 def test_02_finding_b_with_placeholder_rejected(tmp_path: Path):
@@ -95,13 +95,13 @@ def test_02_finding_b_with_placeholder_rejected(tmp_path: Path):
         tmp_path,
         {
             "terraform/aws_iam_account_password_policy.tf": PASSWORD_TF,
-            "terraform/CLOUD-LOG-003.tf": DIRTY_LOG_TF,
+            "terraform/CLOUD-LOG-002.tf": DIRTY_LOG_TF,
         },
         manifest_items=[
-            {"check_id": "CLOUD-LOG-003", "files": ["terraform/CLOUD-LOG-003.tf"]},
+            {"check_id": "CLOUD-LOG-002", "files": ["terraform/CLOUD-LOG-002.tf"]},
         ],
     )
-    b = tfplan.analyze_kit_terraform(kit, ["CLOUD-LOG-003"], try_cli=False)
+    b = tfplan.analyze_kit_terraform(kit, ["CLOUD-LOG-002"], try_cli=False)
     assert b["flags"]["placeholder_unresolved"] is True
     assert b["validate"]["status"] == "FAIL"
     rec = recommend(
@@ -112,7 +112,7 @@ def test_02_finding_b_with_placeholder_rejected(tmp_path: Path):
         destructive=False,
         placeholders=True,
     )
-    assert rec["recommendation"] == "RECOMMEND_REJECT"
+    assert rec["recommendation"] == "REMEDIATION_PREREQUISITES_REQUIRED"
 
 
 def test_03_shared_artifact_with_placeholder_affects_group(tmp_path: Path):
@@ -167,7 +167,7 @@ def test_05_unrelated_config_placeholder_does_not_block_tf_finding(tmp_path: Pat
 def test_06_unknown_artifact_mapping_review_not_fake_pass(tmp_path: Path):
     kit = _kit_with(
         tmp_path,
-        {"terraform/CLOUD-LOG-003.tf": DIRTY_LOG_TF},
+        {"terraform/CLOUD-LOG-002.tf": DIRTY_LOG_TF},
     )
     analysis = tfplan.analyze_kit_terraform(kit, ["CLOUD-ZZZ-999"], try_cli=False)
     assert analysis["artifact_scope"]["uncertain"] is True
@@ -191,11 +191,11 @@ def test_07_whole_job_not_fully_approvable_with_sibling_placeholders(tmp_path: P
         tmp_path,
         {
             "terraform/aws_iam_account_password_policy.tf": PASSWORD_TF,
-            "terraform/CLOUD-LOG-003.tf": DIRTY_LOG_TF,
+            "terraform/CLOUD-LOG-002.tf": DIRTY_LOG_TF,
         },
         manifest_items=[
             {"check_id": "CLOUD-IAM-001", "files": ["terraform/aws_iam_account_password_policy.tf"]},
-            {"check_id": "CLOUD-LOG-003", "files": ["terraform/CLOUD-LOG-003.tf"]},
+            {"check_id": "CLOUD-LOG-002", "files": ["terraform/CLOUD-LOG-002.tf"]},
         ],
     )
     iam = tfplan.analyze_kit_terraform(kit, ["CLOUD-IAM-001"], try_cli=False)
@@ -259,7 +259,7 @@ def test_11_zip_kit_scoped_like_dir(tmp_path: Path):
         tmp_path,
         {
             "terraform/aws_iam_account_password_policy.tf": PASSWORD_TF,
-            "terraform/CLOUD-LOG-003.tf": DIRTY_LOG_TF,
+            "terraform/CLOUD-LOG-002.tf": DIRTY_LOG_TF,
         },
         manifest_items=[
             {"check_id": "CLOUD-IAM-001", "files": ["terraform/aws_iam_account_password_policy.tf"]},

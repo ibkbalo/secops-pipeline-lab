@@ -66,6 +66,7 @@ def discover_for_findings(
     primary = findings[0] if findings else {}
     titles = " ".join(str(f.get("title") or "") for f in findings).lower()
     joined = " ".join(ids).upper() + " " + titles
+    title_primary = str(primary.get("title") or "").lower()
 
     if any(x.startswith("CLOUD-STO") for x in ids) or "public access block" in titles or "s3" in joined.lower():
         return discover_s3_account_bpa(
@@ -74,7 +75,18 @@ def discover_for_findings(
             finding_id=ids[0] if ids else "CLOUD-STO-001",
             finding=primary,
         )
-    if any(x.startswith("CLOUD-LOG") for x in ids) or "cloudtrail" in titles:
+    # AWS Config recorder — must not use CloudTrail discovery/evidence
+    if ("config" in title_primary and "recorder" in title_primary) or (
+        "config" in titles and "recorder" in titles
+    ):
+        return discover_aws_config(
+            profile=profile,
+            region=region,
+            finding_id=ids[0] if ids else "CLOUD-LOG-002",
+            finding=primary,
+        )
+    # CloudTrail-specific titles only (never all CLOUD-LOG* — Config/GuardDuty share that prefix)
+    if "cloudtrail" in titles or "cloud trail" in title_primary:
         return discover_cloudtrail(
             profile=profile,
             region=region,
@@ -88,7 +100,9 @@ def discover_for_findings(
             finding_id=ids[0] if ids else "CLOUD-NET-001",
             finding=primary,
         )
-    if any(x.startswith("CLOUD-IAM") for x in ids) or "iam" in titles or "password" in titles:
+    if any(x.startswith("CLOUD-IAM") for x in ids) or "iam" in titles or "password" in titles or (
+        "access" in titles and "analyzer" in titles
+    ):
         return discover_iam_light(
             profile=profile,
             region=region,
@@ -423,6 +437,245 @@ def discover_cloudtrail(
         }
 
 
+def discover_aws_config(
+    *,
+    profile: str,
+    region: str,
+    finding_id: str,
+    finding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Direct evidence for AWS Config configuration recorder controls.
+    Primary API: configservice.describe_configuration_recorders
+    When recorders exist: configservice.describe_configuration_recorder_status
+    """
+    from change_assurance.domains.cloud.evidence_registry import cloud_specs
+    from change_assurance.evidence_quality import assess_finding_evidence
+
+    evidence: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {
+        "recorder_count": 0,
+        "recording": False,
+        "region": region,
+        "finding_status": "UNKNOWN",
+    }
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        session = boto3.Session(profile_name=profile, region_name=region)
+        cfg = session.client("config", region_name=region)
+        account = None
+        try:
+            account = session.client("sts").get_caller_identity().get("Account")
+        except Exception:
+            account = None
+
+        try:
+            recorders = cfg.describe_configuration_recorders().get("ConfigurationRecorders") or []
+        except ClientError as e:
+            code = str((e.response or {}).get("Error", {}).get("Code") or "")
+            evidence.append(
+                _evidence(
+                    finding_id=finding_id,
+                    api_call="configservice.describe_configuration_recorders",
+                    resource_id=account or "account",
+                    resource_type="aws_config_configuration_recorder",
+                    observed_value={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "code": code,
+                        "region": region,
+                        "human_observed": f"AWS Config API error in {region}: {code or e}",
+                    },
+                    expected_value={"recording": True},
+                    account_id=account,
+                    region=region,
+                    quality="ERROR",
+                    purpose="error",
+                    confidence="low",
+                )
+            )
+            assessment = assess_finding_evidence(
+                finding_id=finding_id,
+                title=str((finding or {}).get("title") or finding_id),
+                evidence=evidence,
+                specs=cloud_specs(),
+            )
+            summary["finding_status"] = assessment.get("finding_status") or "ERROR"
+            return {
+                "version": VERSION,
+                "kind": "aws_config",
+                "status": "FAIL",
+                "profile": profile,
+                "region": region,
+                "account_id": account,
+                "summary": summary,
+                "evidence": assessment.get("labeled_evidence") or evidence,
+                "evidence_assessment": assessment,
+                "scope": "regional",
+                "potentially_affected_workloads": "None detected (configuration recording control)",
+            }
+
+        statuses: list[dict[str, Any]] = []
+        recording: bool | None = None
+        status_error: Exception | None = None
+        if recorders:
+            try:
+                statuses = cfg.describe_configuration_recorder_status().get(
+                    "ConfigurationRecordersStatus"
+                ) or []
+                recording = any(bool(s.get("recording")) for s in statuses)
+                evidence.append(
+                    _evidence(
+                        finding_id=finding_id,
+                        api_call="configservice.describe_configuration_recorder_status",
+                        resource_id=account or "account",
+                        resource_type="aws_config_configuration_recorder",
+                        observed_value={
+                            "ConfigurationRecordersStatus": statuses,
+                            "recording": recording,
+                            "region": region,
+                            "human_observed": (
+                                f"AWS Config configuration recorder recording in {region}"
+                                if recording
+                                else f"AWS Config configuration recorder exists but is not recording in {region}"
+                            ),
+                        },
+                        expected_value={"recording": True},
+                        account_id=account,
+                        region=region,
+                        quality="DIRECT",
+                        purpose="proof",
+                    )
+                )
+            except ClientError as e:
+                status_error = e
+                code = str((e.response or {}).get("Error", {}).get("Code") or "")
+                evidence.append(
+                    _evidence(
+                        finding_id=finding_id,
+                        api_call="configservice.describe_configuration_recorder_status",
+                        resource_id=account or "account",
+                        resource_type="aws_config_configuration_recorder",
+                        observed_value={
+                            "error": str(e),
+                            "code": code,
+                            "region": region,
+                            "ConfigurationRecorders": recorders,
+                            "human_observed": (
+                                f"Config recorder(s) present in {region} but status lookup failed"
+                            ),
+                        },
+                        expected_value={"recording": True},
+                        account_id=account,
+                        region=region,
+                        quality="ERROR",
+                        purpose="error",
+                        confidence="low",
+                    )
+                )
+
+        if not recorders:
+            human = f"No AWS Config configuration recorder found in {region}"
+        elif recording is True:
+            human = f"AWS Config configuration recorder recording in {region}"
+        elif recording is False:
+            human = f"AWS Config configuration recorder exists but is not recording in {region}"
+        else:
+            human = f"Config recorder(s) present in {region} but recording status unavailable"
+
+        summary.update(
+            {
+                "recorder_count": len(recorders),
+                "recording": bool(recording) if recording is not None else None,
+                "region": region,
+            }
+        )
+        observed_recorders: dict[str, Any] = {
+            "ConfigurationRecorders": recorders,
+            "recorder_count": len(recorders),
+            "ConfigurationRecordersStatus": statuses,
+            "region": region,
+            "human_observed": human,
+        }
+        if recording is not None:
+            observed_recorders["recording"] = recording
+        evidence.insert(
+            0,
+            _evidence(
+                finding_id=finding_id,
+                api_call="configservice.describe_configuration_recorders",
+                resource_id=account or "account",
+                resource_type="aws_config_configuration_recorder",
+                observed_value=observed_recorders,
+                expected_value={"recording": True, "recorder_count": ">= 1"},
+                account_id=account,
+                region=region,
+                quality="DIRECT",
+                purpose="proof",
+            ),
+        )
+
+        assessment = assess_finding_evidence(
+            finding_id=finding_id,
+            title=str((finding or {}).get("title") or finding_id),
+            evidence=evidence,
+            specs=cloud_specs(),
+        )
+        # Recorder exists but status API denied/failed → ERROR (never invent PASS/FAIL)
+        if status_error and recorders:
+            assessment = {
+                **assessment,
+                "finding_status": "ERROR",
+                "evidence_quality": "ERROR",
+                "result": "ERROR",
+                "reason": (
+                    "Direct evidence source failed: "
+                    f"configservice.describe_configuration_recorder_status ({status_error})"
+                ),
+                "manager_summary": {
+                    **(assessment.get("manager_summary") or {}),
+                    "headline": "EVIDENCE ERROR",
+                    "result": "ERROR",
+                    "finding_status": "ERROR",
+                    "message": "Required live evidence lookup failed — finding is not confirmed.",
+                    "evidence_source": "configservice.describe_configuration_recorder_status",
+                },
+            }
+        summary["finding_status"] = assessment.get("finding_status") or "UNVERIFIED"
+        return {
+            "version": VERSION,
+            "kind": "aws_config",
+            "status": "OK",
+            "profile": profile,
+            "region": region,
+            "account_id": account,
+            "summary": summary,
+            "evidence": assessment.get("labeled_evidence") or evidence,
+            "evidence_assessment": assessment,
+            "scope": "regional",
+            "potentially_affected_workloads": "None detected (configuration recording control)",
+            "flags_hint": {"config_recorder_enable": True},
+        }
+    except Exception as e:
+        return {
+            "version": VERSION,
+            "kind": "aws_config",
+            "status": "FAIL",
+            "error": str(e),
+            "profile": profile,
+            "region": region,
+            "summary": {**summary, "finding_status": "ERROR"},
+            "evidence": evidence,
+            "evidence_assessment": {
+                "finding_status": "ERROR",
+                "evidence_quality": "ERROR",
+                "reason": str(e),
+            },
+        }
+
+
 def discover_security_groups(
     *,
     profile: str,
@@ -646,6 +899,8 @@ def discover_iam_light(
 
         try:
             password_policy = iam.get_account_password_policy().get("PasswordPolicy") or {}
+            # Password policy is DIRECT proof only for password controls; otherwise context.
+            is_password_control = "password" in title.lower()
             evidence.append(
                 _evidence(
                     finding_id=finding_id,
@@ -663,8 +918,8 @@ def discover_iam_light(
                         "HardExpiry": password_policy.get("HardExpiry"),
                     },
                     region=region,
-                    quality="DIRECT",
-                    purpose="proof",
+                    quality="DIRECT" if is_password_control else "INDIRECT",
+                    purpose="proof" if is_password_control else "account context",
                 )
             )
         except Exception as e:
@@ -807,6 +1062,10 @@ def discover_iam_light(
         "evidence_assessment": assessment,
         "scope": "regional" if is_aa else "account-wide",
         "region": region if is_aa else None,
-        "potentially_affected_workloads": "MANAGER CONTEXT REQUIRED for IAM privilege reductions",
-        "flags_hint": {"iam_change": True},
+        "potentially_affected_workloads": (
+            "Monitoring/analyzer resource only — does not modify IAM permissions or resource policies"
+            if is_aa
+            else "MANAGER CONTEXT REQUIRED for IAM privilege reductions"
+        ),
+        "flags_hint": {"access_analyzer_enable": True} if is_aa else {"iam_change": True},
     }

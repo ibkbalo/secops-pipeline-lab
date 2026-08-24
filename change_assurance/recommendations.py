@@ -63,14 +63,26 @@ def recommend(
 
     if placeholders:
         reasons.append("Unresolved placeholders in change artifact")
-    if validation_status == "FAIL":
+        reasons.append("REMEDIATION_PREREQUISITES_REQUIRED")
+    if validation_status == "FAIL" and not placeholders:
         reasons.append("Artifact validation failed")
     if destructive and blast_level in {"CRITICAL", "HIGH"}:
         reasons.append("Destructive actions with elevated blast radius")
     if protected_asset_hit:
         reasons.append("Protected asset would be modified/deleted")
 
-    if placeholders or validation_status == "FAIL" or (destructive and blast_level == "CRITICAL") or protected_asset_hit:
+    # Placeholders = prerequisites required (reviewable, not execution-ready; not a hard reject)
+    if placeholders:
+        return {
+            "recommendation": "REMEDIATION_PREREQUISITES_REQUIRED",
+            "deployment_ready": False,
+            "remediation_status": "PREREQUISITES_REQUIRED",
+            "reasons": reasons or ["Unresolved REPLACE_*/TODO/CHANGEME placeholders"],
+            "manager_approval_required": True,
+            "execution_ready": False,
+        }
+
+    if validation_status == "FAIL" or (destructive and blast_level == "CRITICAL") or protected_asset_hit:
         return {
             "recommendation": "RECOMMEND_REJECT",
             "deployment_ready": False,

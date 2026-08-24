@@ -171,7 +171,7 @@ resource "aws_cloudtrail" "sentinel_org" {
         blast={"level": "MEDIUM"},
         discovery={"summary": {"finding_status": "CONFIRMED"}},
     )
-    assert ready["recommendation"] == "RECOMMEND_REJECT"
+    assert ready["recommendation"] == "REMEDIATION_PREREQUISITES_REQUIRED"
     assert ready["deployment_ready"] is False
 
 

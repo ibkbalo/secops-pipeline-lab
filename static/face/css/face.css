@@ -1492,6 +1492,10 @@ strong.risk-low { color: var(--teal, #2dd4bf); }
   color: var(--blue);
 }
 .mm-learn-body p { margin: 8px 0; color: #cbd5e1; font-size: 0.84rem; line-height: 1.4; }
+
+.mm-understand-body p { margin: 10px 0; color: #e2e8f0; font-size: 0.88rem; line-height: 1.45; }
+.mm-understand-body ul { margin: 6px 0 10px 1.1rem; color: #cbd5e1; font-size: 0.86rem; }
+.mm-understand { border-left: 3px solid #38bdf8; padding-left: 12px; }
 .mm-advanced-body { margin-top: 10px; font-size: 0.84rem; }
 .mm-pre {
   white-space: pre-wrap;

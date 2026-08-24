@@ -72,6 +72,7 @@ def load_or_analyze(
     *,
     refresh: bool = False,
     try_terraform_cli: bool = False,
+    focus_finding_id: str | None = None,
 ) -> dict[str, Any]:
     from change_assurance.engine import load_or_assure, persist_assurance
 
@@ -81,11 +82,13 @@ def load_or_analyze(
         findings,
         refresh=refresh,
         try_terraform_cli=try_terraform_cli,
+        focus_finding_id=focus_finding_id,
     )
     if report.get("type") == "change_assurance_report" and refresh:
         persist_assurance(workspace, report)
     legacy = report.get("legacy_impact")
     if legacy:
+        # Always rebind nested change_assurance from the live report (never leave a bool/stale nest)
         legacy["change_assurance"] = {
             "domain": report.get("domain"),
             "recommendation": report.get("recommendation"),
@@ -124,13 +127,66 @@ def load_or_analyze(
             "evidence_assessment": report.get("evidence_assessment"),
             "evidence_quality": report.get("evidence_quality"),
             "evidence_registry_match": report.get("evidence_registry_match"),
-            "finding_status": report.get("finding_status"),
             "relevant_artifacts": report.get("relevant_artifacts"),
             "relevant_placeholders": report.get("relevant_placeholders"),
+            "remediation_prerequisites": report.get("remediation_prerequisites"),
+            "prerequisite_manager_decision": report.get("prerequisite_manager_decision"),
+            "prerequisite_decision": report.get("prerequisite_decision"),
+            "prerequisite_resolution": report.get("prerequisite_resolution"),
+            "remediation_status": report.get("remediation_status"),
+            "execution_ready": report.get("execution_ready"),
+            "cost_note": report.get("cost_note"),
+            "do_not_touch": report.get("do_not_touch"),
+            "required_remediation_role_permissions": report.get("required_remediation_role_permissions"),
             "sibling_placeholder_artifacts": report.get("sibling_placeholder_artifacts"),
             "job_fully_approvable": report.get("job_fully_approvable"),
             "artifact_scope": report.get("artifact_scope"),
+            "analysis_logic_version": report.get("analysis_logic_version"),
+            "cross_control_impact": report.get("cross_control_impact"),
+            "predicted_secondary_findings": report.get("predicted_secondary_findings"),
+            "remediation_fully_hardened": report.get("remediation_fully_hardened"),
+            "reviewed_plan": report.get("reviewed_plan"),
+            "finding_execution": report.get("finding_execution"),
+            "remediation_lifecycle_state": report.get("remediation_lifecycle_state"),
+            "prerequisite_existence": report.get("prerequisite_existence"),
+            "suppress_placeholder_prerequisites": report.get("suppress_placeholder_prerequisites"),
+            "execution_status_label": report.get("execution_status_label"),
         }
+        # Keep top-level mirrors in sync for Manager Mode consumers
+        for key in (
+            "primary_finding_id",
+            "finding_status",
+            "evidence",
+            "evidence_assessment",
+            "evidence_quality",
+            "relevant_artifacts",
+            "relevant_placeholders",
+            "remediation_prerequisites",
+            "prerequisite_manager_decision",
+            "prerequisite_decision",
+            "prerequisite_resolution",
+            "remediation_status",
+            "execution_ready",
+            "cost_note",
+            "do_not_touch",
+            "required_remediation_role_permissions",
+            "verification",
+            "analysis_logic_version",
+            "artifact_scope",
+            "recommendation",
+            "deployment_ready",
+            "cross_control_impact",
+            "predicted_secondary_findings",
+            "remediation_fully_hardened",
+            "reviewed_plan",
+            "finding_execution",
+            "remediation_lifecycle_state",
+            "prerequisite_existence",
+            "suppress_placeholder_prerequisites",
+            "execution_status_label",
+        ):
+            if report.get(key) is not None:
+                legacy[key] = report.get(key)
         return legacy
     # Legacy-only cache wrap
     return analyze_job(job, findings, try_terraform_cli=try_terraform_cli)

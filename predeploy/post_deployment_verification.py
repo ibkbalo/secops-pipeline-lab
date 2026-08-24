@@ -23,6 +23,19 @@ def verification_plan_for_finding(finding_id: str, title: str | None = None) -> 
             "pass_criteria": "ACTIVE ACCOUNT Access Analyzer present in the intended Region",
             "version": VERSION,
         }
+    if ("config" in title_l and "recorder" in title_l) or "aws config" in title_l:
+        return {
+            "finding_id": finding_id,
+            "method": "aws_api",
+            "steps": [
+                "Call configservice.describe_configuration_recorders in the finding Region",
+                "If recorders exist, call configservice.describe_configuration_recorder_status",
+                "Confirm at least one recorder with recording=true",
+                "Re-run scan_cloud_pack live and ensure the Config recorder control no longer fails",
+            ],
+            "pass_criteria": "AWS Config configuration recorder present and recording",
+            "version": VERSION,
+        }
     if "guardduty" in title_l or fid in {"CLOUD-LOG-004", "AWS-016"}:
         return {
             "finding_id": finding_id,

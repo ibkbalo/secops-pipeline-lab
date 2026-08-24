@@ -17,7 +17,12 @@ def test_generic_unknown_domain_review():
     findings = [{"id": "X-001", "title": "Generic issue", "severity": "high"}]
     report = assure_job(job, findings)
     assert report["type"] == "change_assurance_report"
-    assert report["recommendation"] in {"RECOMMEND_REVIEW", "RECOMMEND_REJECT", "NO_ACTION_REQUIRED"}
+    assert report["recommendation"] in {
+        "RECOMMEND_REVIEW",
+        "RECOMMEND_REJECT",
+        "NO_ACTION_REQUIRED",
+        "REMEDIATION_PREREQUISITES_REQUIRED",
+    }
     assert report["manager_approval_required"] is True
     assert report["auto_apply_forbidden"] is True
     assert report["recommendation"] != "APPROVED"  # never authorization

@@ -17,7 +17,7 @@ import ai_brain_llm
 import compliance_map
 
 ROOT = Path(__file__).resolve().parent
-FACE_VERSION = "0.8.0-casebook"
+FACE_VERSION = "0.8.2-explain"
 
 
 def _cloud_live_ready() -> bool:
@@ -230,7 +230,7 @@ def _dashboard_context():
     try:
         import security_casebook
 
-        security_casebook.ensure_iam_password_policy_case(ai_brain_agent.DEFAULT_WORKSPACE)
+        security_casebook.ensure_completed_cases(ai_brain_agent.DEFAULT_WORKSPACE)
         completed_cases = security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE)[:8]
         completed_n = len(security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE))
     except Exception:
@@ -435,6 +435,15 @@ def _load_job_review(job: dict) -> dict:
         role=job.get("role"),
     )
 
+    focus_id = None
+    try:
+        from flask import has_request_context
+
+        if has_request_context():
+            focus_id = request.args.get("finding") or None
+    except Exception:
+        focus_id = None
+
     impact = None
     try:
         from predeploy.impact_analysis import load_or_analyze
@@ -443,12 +452,44 @@ def _load_job_review(job: dict) -> dict:
         refresh = False
         if has_request_context():
             refresh = str(request.args.get("refresh_impact") or "") in {"1", "true", "yes"}
+            if not focus_id:
+                focus_id = request.args.get("finding") or None
+        # If a reviewed Terraform plan is bound for the focused finding, never serve
+        # plan-unaware Manager Mode (forces recompute when cache/process is stale).
+        if focus_id:
+            try:
+                from change_assurance.plan_ingestion import resolve_reviewed_plan_ref
+
+                if resolve_reviewed_plan_ref(job, focus_id):
+                    # Soft refresh path: load_or_analyze still checks stale reasons;
+                    # also force refresh so live Face never shows legacy stubs.
+                    refresh = True
+            except Exception:
+                pass
+            # Cross-job remediation lifecycle: force refresh when recovery is bound
+            if (job.get("finding_execution") or {}).get(str(focus_id)) or (
+                job.get("remediation_lifecycle") or {}
+            ).get("remediation_state") in {"PARTIAL_EXECUTION", "RECOVERY_REQUIRED"}:
+                refresh = True
+                try:
+                    from change_assurance.remediation_ledger import reconcile_job_with_ledger
+
+                    job = reconcile_job_with_ledger(
+                        ai_brain_agent.DEFAULT_WORKSPACE,
+                        job,
+                        control_ids=[str(focus_id)],
+                        run_discovery=False,
+                        persist=True,
+                    )
+                except Exception:
+                    pass
         impact = load_or_analyze(
             ai_brain_agent.DEFAULT_WORKSPACE,
             job,
             findings,
             refresh=refresh,
             try_terraform_cli=False,
+            focus_finding_id=focus_id,
         )
         # Overlay Brain recommendation with pre-deploy readiness (still not authorization).
         if impact and impact.get("recommendation"):
@@ -472,14 +513,8 @@ def _load_job_review(job: dict) -> dict:
             "report_text": f"Impact analysis unavailable: {impact_exc}",
         }
 
-    focus_id = None
-    try:
-        from flask import has_request_context
-
-        if has_request_context():
-            focus_id = request.args.get("finding") or None
-    except Exception:
-        focus_id = None
+    if not focus_id and isinstance(impact, dict):
+        focus_id = impact.get("primary_finding_id")
 
     manager = None
     try:
@@ -730,7 +765,7 @@ def completed_jobs():
 
     ws = ai_brain_agent.DEFAULT_WORKSPACE
     try:
-        security_casebook.ensure_iam_password_policy_case(ws)
+        security_casebook.ensure_completed_cases(ws)
     except Exception:
         pass
     cases = security_casebook.list_cases(ws)
@@ -845,6 +880,53 @@ def api_alerts():
     )
 
 
+@app.route("/api/job/<job_id>/prerequisite-decision", methods=["POST"])
+def api_prerequisite_decision(job_id: str):
+    """Record manager prerequisite choice and regenerate finding artifacts (no AWS apply)."""
+    job = _job(job_id)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    body = request.get_json(silent=True) or {}
+    finding_id = str(body.get("finding_id") or request.args.get("finding") or "").strip()
+    choice = str(body.get("choice") or "").strip()
+    note = body.get("note")
+    if not finding_id or not choice:
+        return jsonify({"error": "finding_id and choice required"}), 400
+    from change_assurance.prerequisite_resolution import apply_decision_and_regenerate
+
+    findings: list[dict] = []
+    scan_path = Path(str(job.get("scan_report_path") or ""))
+    if scan_path.is_file():
+        try:
+            report = json.loads(scan_path.read_text(encoding="utf-8-sig"))
+            findings = [f for f in (report.get("findings") or []) if isinstance(f, dict)]
+        except Exception:
+            findings = []
+    result = apply_decision_and_regenerate(
+        ai_brain_agent.DEFAULT_WORKSPACE,
+        job_id,
+        finding_id,
+        choice,
+        note=note,
+        findings=findings,
+    )
+    # Refresh assurance for the finding (still no apply)
+    try:
+        from change_assurance.engine import load_or_assure
+
+        job2 = _job(job_id) or job
+        load_or_assure(
+            ai_brain_agent.DEFAULT_WORKSPACE,
+            job2,
+            findings,
+            refresh=True,
+            focus_finding_id=finding_id,
+        )
+    except Exception as exc:
+        result["assurance_refresh_error"] = str(exc)
+    return jsonify(result)
+
+
 @app.route("/api/backlog")
 def api_backlog():
     import worker_alert
@@ -857,9 +939,20 @@ def api_backlog():
 def main():
     print(f"Sentinel Stacks Face {FACE_VERSION}")
     print(f"Brain {ai_brain_agent.VERSION}")
+    try:
+        import change_assurance.engine as _cae
+
+        print(
+            f"Change Assurance {_cae.VERSION} "
+            f"logic={getattr(_cae, 'ANALYSIS_LOGIC_VERSION', None)}"
+        )
+        print(f"CA engine file: {_cae.__file__}")
+    except Exception as _e:
+        print(f"Change Assurance import failed: {_e}")
     print(f"Workspace: {ai_brain_agent.DEFAULT_WORKSPACE}")
-    print("Open: http://127.0.0.1:5050")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    port = int((__import__("os").environ.get("FACE_PORT") or "5050").strip() or "5050")
+    print(f"Open: http://127.0.0.1:{port}")
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":

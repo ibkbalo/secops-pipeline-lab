@@ -52,7 +52,18 @@ def compute_recommendation(
     if destructive:
         reasons.append("Destructive Terraform actions present")
 
-    if placeholders or validate == "FAIL" or (plan == "FAIL" and placeholders):
+    if placeholders:
+        return {
+            "recommendation": "REMEDIATION_PREREQUISITES_REQUIRED",
+            "deployment_ready": False,
+            "remediation_status": "PREREQUISITES_REQUIRED",
+            "execution_ready": False,
+            "reasons": reasons or ["Unresolved Terraform placeholders (e.g. REPLACE_*)"],
+            "manager_approval_required": True,
+            "version": VERSION,
+        }
+
+    if validate == "FAIL" or (plan == "FAIL" and placeholders):
         return {
             "recommendation": "RECOMMEND_REJECT",
             "deployment_ready": False,

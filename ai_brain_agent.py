@@ -503,6 +503,21 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         scan_report: dict | None = None,
         after_scan_path: str | None = None,
     ) -> None:
+        # Per-finding Casebook closure must run even when pending priors are empty
+        # or the account still has unrelated open findings.
+        try:
+            import security_casebook
+
+            security_casebook.reconcile_verified_remediations(
+                workspace,
+                after_findings=new_findings,
+                after_scan_path=after_scan_path,
+                role=role_key,
+                classification=security_casebook.CLASSIFICATION_LAB,
+            )
+        except Exception as exc:
+            errors.append(f"{role_key}: casebook:{exc}")
+
         if not prior_jobs:
             return
         try:
@@ -537,34 +552,6 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
         )
         if note:
             evidence_notes.append(note)
-        # Permanent casebook archive when clears are verified against an approved prior job.
-        # Pending jobs alone are not enough — remediation is usually approved before re-scan.
-        try:
-            import security_casebook
-
-            candidates = list(prior_jobs)
-            for jp in paths["jobs"].glob("job_*.json"):
-                try:
-                    pj = _read_json(jp)
-                except Exception:
-                    continue
-                if pj.get("role") != role_key:
-                    continue
-                if pj.get("status") not in {"approved", "partially_approved"}:
-                    continue
-                if any(c.get("job_id") == pj.get("job_id") for c in candidates):
-                    continue
-                candidates.append(pj)
-            for pj in candidates:
-                security_casebook.maybe_create_case_on_clear(
-                    workspace,
-                    before_job=pj,
-                    after_findings=new_findings,
-                    after_scan_path=after_scan_path,
-                    classification=security_casebook.CLASSIFICATION_LAB,
-                )
-        except Exception as exc:
-            errors.append(f"{role_key}: casebook:{exc}")
 
     for role_key in roles:
         try:
@@ -642,7 +629,45 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
                 kit = (triage.get("remediation") or {}).get("kit_path")
                 if kit:
                     existing["kit_path"] = kit
+                    # Re-apply manager CREATE_DEDICATED resolutions into the rebound kit
+                    # so legacy FIX_MAP templates cannot silently replace resolved artifacts.
+                    try:
+                        from change_assurance.prerequisite_resolution import (
+                            rehydrate_resolved_artifacts_into_kit,
+                        )
+
+                        rehydrate_resolved_artifacts_into_kit(
+                            workspace,
+                            existing,
+                            findings=findings_list,
+                        )
+                        # reload after rehydrate may update resolutions / paths
+                        existing = json.loads(
+                            (paths["jobs"] / f"{existing['job_id']}.json").read_text(encoding="utf-8-sig")
+                        )
+                    except Exception as rehydrate_exc:
+                        errors.append(
+                            f"{role_key}: prerequisite rehydrate failed for {existing.get('job_id')}: {rehydrate_exc}"
+                        )
                 existing["dedupe_hits"] = int(existing.get("dedupe_hits") or 0) + 1
+                try:
+                    from change_assurance.remediation_ledger import reconcile_job_with_ledger
+
+                    existing = reconcile_job_with_ledger(
+                        workspace,
+                        existing,
+                        control_ids=[
+                            str(f.get("id") or "")
+                            for f in findings_list
+                            if isinstance(f, dict) and f.get("id")
+                        ],
+                        run_discovery=True,
+                        persist=False,
+                    )
+                except Exception as ledger_exc:
+                    errors.append(
+                        f"{role_key}: remediation ledger reconcile failed for {existing.get('job_id')}: {ledger_exc}"
+                    )
                 _write_json(paths["jobs"] / f"{existing['job_id']}.json", existing)
                 # Still only one pending job per role — close any siblings.
                 _supersede_pending_for_role(
@@ -721,6 +746,24 @@ def run_cycle(params: dict[str, Any]) -> dict[str, Any]:
                 old["replaced_by_job_id"] = job_id
                 _write_json(op, old)
         _write_json(paths["jobs"] / f"{job_id}.json", job)
+        # Cross-job remediation continuity: reconcile persistent lifecycle ledger
+        # (scan jobs are snapshots; remediation state survives supersession).
+        try:
+            from change_assurance.remediation_ledger import reconcile_job_with_ledger
+
+            job = reconcile_job_with_ledger(
+                workspace,
+                job,
+                control_ids=[
+                    str(f.get("id") or "")
+                    for f in findings_list
+                    if isinstance(f, dict) and f.get("id")
+                ],
+                run_discovery=True,
+                persist=True,
+            )
+        except Exception as ledger_exc:
+            errors.append(f"{role_key}: remediation ledger reconcile failed: {ledger_exc}")
         jobs_created.append(job)
         triage["job_created"] = job_id
         if closed:

@@ -15,7 +15,11 @@ from typing import Any
 
 VERSION = "0.1.1"
 
-PLACEHOLDER_RE = re.compile(r"REPLACE_[A-Z0-9_]+|TODO_|CHANGEME|YOUR_", re.I)
+# Any of these in an active execution artifact block execution-ready status.
+PLACEHOLDER_RE = re.compile(
+    r"REPLACE_[A-Z0-9_]+|TODO_[A-Z0-9_]*|\bTODO\b|CHANGEME|YOUR_[A-Z0-9_]+",
+    re.I,
+)
 RESOURCE_RE = re.compile(
     r'resource\s+"([^"]+)"\s+"([^"]+)"',
     re.M,
@@ -24,7 +28,15 @@ DESTROY_HINTS = re.compile(
     r"\b(force_destroy\s*=\s*true|prevent_destroy\s*=\s*false)\b",
     re.I,
 )
-IAM_TYPES = {"aws_iam_role", "aws_iam_policy", "aws_iam_user", "aws_iam_role_policy", "aws_iam_user_policy", "aws_iam_policy_attachment"}
+IAM_TYPES = {
+    "aws_iam_role",
+    "aws_iam_policy",
+    "aws_iam_user",
+    "aws_iam_role_policy",
+    "aws_iam_user_policy",
+    "aws_iam_policy_attachment",
+    "aws_iam_service_linked_role",
+}
 NET_TYPES = {
     "aws_security_group",
     "aws_security_group_rule",
@@ -160,9 +172,36 @@ def resolve_finding_kit_artifacts(
                 existing.append(hit)
         paths = list(dict.fromkeys(existing))
 
+    # Prefer terraform/*.tf over configs/*.conf for the same control id
+    def _artifact_rank(path: str) -> tuple:
+        p = path.lower()
+        if p.endswith(".tf") or "/terraform/" in p:
+            return (0, path)
+        if p.endswith((".yml", ".yaml")) or "/runbooks/" in p:
+            return (1, path)
+        if p.endswith(".conf") or "/configs/" in p:
+            return (3, path)
+        return (2, path)
+
+    paths = sorted(paths, key=_artifact_rank)
+
     uncertain = mapping == "uncertain" or (bool(fid) and not paths and bool(all_names))
     if uncertain and not paths:
         mapping = "uncertain"
+
+    # Drop legacy .conf when a .tf for the same finding exists (execution artifact rebind)
+    tf_for_fid = [p for p in paths if p.lower().endswith(".tf") and fid and fid in p]
+    if tf_for_fid:
+        def _is_legacy_conf(path: str) -> bool:
+            norm = path.replace("\\", "/").lower()
+            return bool(
+                fid
+                and fid.lower() in norm
+                and norm.endswith(".conf")
+                and (norm.startswith("configs/") or "/configs/" in norm)
+            )
+
+        paths = [p for p in paths if not _is_legacy_conf(p)]
 
     return {
         "finding_id": fid or None,
@@ -327,10 +366,21 @@ def analyze_terraform_sources(sources: dict[str, str]) -> dict[str, Any]:
                 "aws_s3_bucket_public_access_block",
                 "aws_s3_bucket_policy",
                 "aws_s3_bucket_acl",
+                "aws_s3_bucket",
+                "aws_s3_bucket_server_side_encryption_configuration",
+                "aws_s3_bucket_ownership_controls",
             }:
                 flags["data_access_change"] = True
-            # Account-level BPA is additive hardening — not treated as data-access risk by itself.
-            if rtype in {"aws_cloudtrail", "aws_guardduty_detector", "aws_config_configuration_recorder"}:
+            if rtype in {
+                "aws_cloudtrail",
+                "aws_guardduty_detector",
+                "aws_config_configuration_recorder",
+                "aws_config_delivery_channel",
+                "aws_config_configuration_recorder_status",
+            }:
+                flags["config_recorder_enable"] = True if "config" in rtype else flags.get("config_recorder_enable")
+                if rtype == "aws_config_configuration_recorder":
+                    flags["config_recorder_enable"] = True
                 pass
         if DESTROY_HINTS.search(text):
             flags["destructive_tf"] = True

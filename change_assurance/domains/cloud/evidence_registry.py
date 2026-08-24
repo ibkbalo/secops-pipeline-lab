@@ -52,12 +52,49 @@ def _access_analyzer_active_account(observed: dict) -> tuple[bool | None, str]:
     return False, f"no ACTIVE ACCOUNT analyzer in {region}"
 
 
+def _config_recorder_enabled(observed: dict) -> tuple[bool | None, str]:
+    """
+    CLOUD-LOG-002 contract: an AWS Config configuration recorder must exist and be recording.
+    Empty ConfigurationRecorders → FAIL. Exists but recording=false → FAIL.
+    """
+    if not isinstance(observed, dict):
+        return None, "observed value missing"
+    if observed.get("error"):
+        return None, str(observed.get("error"))
+    region = observed.get("region") or "unknown-region"
+    recorders = observed.get("ConfigurationRecorders")
+    if recorders is None:
+        recorders = observed.get("recorders")
+    if recorders is None and observed.get("recorder_count") is not None:
+        count = int(observed.get("recorder_count") or 0)
+        recorders = [] if count == 0 else [{"name": "present"}]
+    if recorders is None:
+        return None, "configuration recorder list missing"
+    if recorders == [] or int(observed.get("recorder_count") or len(recorders) or 0) == 0:
+        return False, f"No AWS Config configuration recorder found in {region}"
+
+    recording = observed.get("recording")
+    if recording is True:
+        return True, f"AWS Config configuration recorder is recording in {region}"
+    if recording is False:
+        return False, f"AWS Config configuration recorder exists but is not recording in {region}"
+
+    statuses = observed.get("ConfigurationRecordersStatus") or observed.get("recorder_statuses") or []
+    if statuses:
+        if any(bool(s.get("recording") if isinstance(s, dict) else False) for s in statuses):
+            return True, f"AWS Config configuration recorder is recording in {region}"
+        return False, f"AWS Config configuration recorder exists but is not recording in {region}"
+    return None, f"recorder present in {region} but recording status unavailable"
+
+
 CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
     # —— IAM password policy (must use get_account_password_policy) ——
     EvidenceSpec(
         control_key="iam_password_min_length",
         title_tokens=("password", "minimum length"),
         preferred_sources=("iam.get_account_password_policy",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer.", "guardduty."),
+        aws_service="iam",
         required_fields=("MinimumPasswordLength",),
         operator=">=",
         expected_value=14,
@@ -68,6 +105,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_password_complexity_upper_symbols",
         title_tokens=("password complexity", "uppercase"),
         preferred_sources=("iam.get_account_password_policy",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("RequireUppercaseCharacters", "RequireSymbols"),
         operator="all_true",
         expected_value=True,
@@ -78,6 +117,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_password_complexity_lower_numbers",
         title_tokens=("password complexity", "lowercase"),
         preferred_sources=("iam.get_account_password_policy",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("RequireLowercaseCharacters", "RequireNumbers"),
         operator="all_true",
         expected_value=True,
@@ -88,6 +129,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_password_max_age",
         title_tokens=("password", "max age"),
         preferred_sources=("iam.get_account_password_policy",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("MaxPasswordAge",),
         operator="custom",
         expected_value="1–90",
@@ -107,6 +150,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_password_reuse",
         title_tokens=("password", "reuse"),
         preferred_sources=("iam.get_account_password_policy",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("PasswordReusePrevention",),
         operator=">=",
         expected_value=24,
@@ -118,6 +163,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_root_mfa",
         title_tokens=("root", "mfa"),
         preferred_sources=("iam.get_account_summary",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("AccountMFAEnabled",),
         operator="==",
         expected_value=1,
@@ -128,6 +175,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="iam_root_no_access_keys",
         title_tokens=("root", "access keys"),
         preferred_sources=("iam.get_account_summary",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="iam",
         required_fields=("AccountAccessKeysPresent",),
         operator="==",
         expected_value=0,
@@ -138,7 +187,16 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
     EvidenceSpec(
         control_key="iam_access_analyzer",
         title_tokens=("access", "analyzer"),
+        control_ids=("CLOUD-IAM-013",),
         preferred_sources=("accessanalyzer.list_analyzers",),
+        incompatible_sources=(
+            "cloudtrail.",
+            "configservice.",
+            "iam.get_account_password_policy",
+            "iam.get_account_summary",
+            "guardduty.",
+        ),
+        aws_service="accessanalyzer",
         required_fields=("active_account_analyzer_count", "region", "human_observed"),
         operator="custom",
         expected_value=">= 1 ACTIVE ACCOUNT analyzer",
@@ -152,6 +210,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         title_tokens=("public access",),
         id_prefixes=("CLOUD-STO",),
         preferred_sources=("s3control.get_public_access_block",),
+        incompatible_sources=("cloudtrail.", "configservice.", "iam.", "accessanalyzer."),
+        aws_service="s3",
         required_fields=(
             "BlockPublicAcls",
             "IgnorePublicAcls",
@@ -168,6 +228,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         control_key="s3_account_bpa_alt",
         title_tokens=("s3", "block public"),
         preferred_sources=("s3control.get_public_access_block",),
+        incompatible_sources=("cloudtrail.", "configservice.", "iam.", "accessanalyzer."),
+        aws_service="s3",
         required_fields=(
             "BlockPublicAcls",
             "IgnorePublicAcls",
@@ -180,12 +242,46 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         human_expected="All four settings enabled",
         custom_eval=_all_pab_true,
     ),
-    # —— CloudTrail ——
+    # —— AWS Config recorder (must NOT use CloudTrail evidence) ——
+    EvidenceSpec(
+        control_key="aws_config_recorder",
+        title_tokens=("config", "recorder"),
+        preferred_sources=(
+            "configservice.describe_configuration_recorders",
+            "config.describe_configuration_recorders",
+            "configservice.describe_configuration_recorder_status",
+            "config.describe_configuration_recorder_status",
+        ),
+        incompatible_sources=(
+            "cloudtrail.",
+            "iam.get_account_password_policy",
+            "iam.get_account_summary",
+            "accessanalyzer.",
+            "guardduty.",
+            "s3control.",
+            "ec2.describe_security_groups",
+        ),
+        aws_service="config",
+        required_fields=("region", "human_observed"),
+        operator="custom",
+        expected_value="enabled/recording configuration recorder",
+        human_label="AWS Config configuration recorder",
+        human_expected="An enabled/recording AWS Config configuration recorder",
+        custom_eval=_config_recorder_enabled,
+    ),
+    # —— CloudTrail (title/service match only — never all CLOUD-LOG* IDs) ——
     EvidenceSpec(
         control_key="cloudtrail_present",
         title_tokens=("cloudtrail",),
-        id_prefixes=("CLOUD-LOG",),
         preferred_sources=("cloudtrail.describe_trails", "cloudtrail.get_trail_status"),
+        incompatible_sources=(
+            "configservice.",
+            "config.describe_configuration",
+            "accessanalyzer.",
+            "iam.get_account_password_policy",
+            "guardduty.",
+        ),
+        aws_service="cloudtrail",
         required_fields=("trail_count",),
         operator=">=",
         expected_value=1,
@@ -198,6 +294,8 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         title_tokens=("security group",),
         id_prefixes=("CLOUD-NET",),
         preferred_sources=("ec2.describe_security_groups",),
+        incompatible_sources=("cloudtrail.", "configservice.", "accessanalyzer."),
+        aws_service="ec2",
         required_fields=("open_world_count",),
         operator="==",
         expected_value=0,

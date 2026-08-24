@@ -467,12 +467,65 @@ def _engine_storage(ctx: PackContext) -> list[dict]:
                 _fail(ctx, f, eng, "aws", _truthy(b.get("versioning")),
                       f"S3 versioning: {name}", "medium",
                       f"Bucket '{name}' versioning is off.",
-                      resource={"type": "aws_s3_bucket", "id": name, "provider": "aws"})
+                      resource={"type": "aws_s3_bucket", "id": name, "provider": "aws"},
+                      evidence={"bucket": b, "control_class": "s3_versioning", "applicability": "REQUIRED"})
             if "mfa_delete" in b:
-                _fail(ctx, f, eng, "aws", _truthy(b.get("mfa_delete")),
-                      f"S3 MFA delete: {name}", "low",
-                      f"Bucket '{name}' MFA Delete is not enabled.",
-                      resource={"type": "aws_s3_bucket", "id": name, "provider": "aws"})
+                # MFA Delete is NOT required on every bucket. It needs root + MFA serial/token
+                # and cannot be managed by least-privilege Terraform remediation.
+                try:
+                    from change_assurance.domains.cloud.s3_control_conflicts import (
+                        classify_s3_bucket,
+                        mfa_delete_applicability,
+                    )
+                    from change_assurance.control_conflicts import NOT_APPLICABLE, MANUAL_ONLY, RECOMMENDED
+
+                    bclass = classify_s3_bucket(name, tags=b.get("tags") if isinstance(b.get("tags"), dict) else None)
+                    mfa_app = mfa_delete_applicability(bclass)
+                except Exception:
+                    bclass = "GENERAL"
+                    mfa_app = "RECOMMENDED"
+                    NOT_APPLICABLE, MANUAL_ONLY, RECOMMENDED = "NOT_APPLICABLE", "MANUAL_ONLY", "RECOMMENDED"
+
+                if mfa_app == NOT_APPLICABLE:
+                    # Service delivery / automated log buckets — do not emit a FAIL.
+                    pass
+                else:
+                    # HIGH_VALUE → MANUAL_ONLY fail (human/root process). GENERAL → RECOMMENDED low.
+                    sev = "medium" if mfa_app == MANUAL_ONLY else "low"
+                    _fail(
+                        ctx,
+                        f,
+                        eng,
+                        "aws",
+                        _truthy(b.get("mfa_delete")),
+                        f"S3 MFA delete: {name}",
+                        sev,
+                        (
+                            f"Bucket '{name}' MFA Delete is not enabled. "
+                            f"Applicability={mfa_app} (requires AWS account root + MFA; "
+                            f"not auto-remediable via Sentinel least-privilege Terraform)."
+                        ),
+                        resource={"type": "aws_s3_bucket", "id": name, "provider": "aws"},
+                        evidence={
+                            "bucket": b,
+                            "control_class": "s3_mfa_delete",
+                            "bucket_class": bclass,
+                            "applicability": mfa_app,
+                            "auto_remediable": False,
+                            "aws_root_required": True,
+                        },
+                        remediation={
+                            "steps": [
+                                "Confirm MFA Delete is warranted for this high-value bucket.",
+                                "Enable via root user + MFA device using AWS CLI put-bucket-versioning "
+                                "(Terraform cannot supply the MFA token).",
+                                "Do not attempt via SentinelStacksRemediationRole.",
+                            ],
+                            "effort": "high",
+                            "applicability": mfa_app,
+                            "auto_apply_forbidden": True,
+                        },
+                    )
             if "object_lock" in b:
                 _fail(ctx, f, eng, "aws", _truthy(b.get("object_lock")),
                       f"S3 object lock (compliance data): {name}", "medium",
@@ -633,38 +686,46 @@ def _engine_logging(ctx: PackContext) -> list[dict]:
         trails = _as_list(d.get("cloudtrail_trails"))
         _fail(ctx, f, eng, "aws", len(trails) > 0,
               "CloudTrail trail exists", "critical",
-              "No CloudTrail trails configured — API activity is not recorded.")
+              "No CloudTrail trails configured — API activity is not recorded.",
+              control_id="CLOUD-LOG-012")
         multi = any(_truthy(t.get("is_multi_region")) for t in trails)
         _fail(ctx, f, eng, "aws", multi,
               "CloudTrail multi-region trail enabled", "high",
-              "No multi-region CloudTrail trail — events outside home region may be missed.")
+              "No multi-region CloudTrail trail — events outside home region may be missed.",
+              control_id="CLOUD-LOG-011")
         valid = all(_truthy(t.get("log_file_validation_enabled")) for t in trails) if trails else False
         _fail(ctx, f, eng, "aws", valid,
               "CloudTrail log file validation enabled", "medium",
-              "CloudTrail log file validation is off — integrity of logs is weaker.")
+              "CloudTrail log file validation is off — integrity of logs is weaker.",
+              control_id="CLOUD-LOG-001")
         cfg = d.get("aws_config") or {}
         _fail(ctx, f, eng, "aws", _truthy(cfg.get("recording_enabled")),
               "AWS Config recorder enabled", "high",
-              "AWS Config is not recording resource configuration history.")
+              "AWS Config is not recording resource configuration history.",
+              control_id="CLOUD-LOG-002")
         gd = _as_list(d.get("guardduty_detectors"))
         gd_on = any(str(g.get("status") or "").upper() == "ENABLED" or _truthy(g.get("enabled")) for g in gd)
         _fail(ctx, f, eng, "aws", gd_on,
               "GuardDuty detector enabled", "high",
-              "GuardDuty is not enabled — threat detection for the account is blind.")
+              "GuardDuty is not enabled — threat detection for the account is blind.",
+              control_id="CLOUD-LOG-003")
         sechub = d.get("security_hub") or {}
         if d.get("security_hub") is not None:
             _fail(ctx, f, eng, "aws", _truthy(sechub.get("enabled")),
                   "AWS Security Hub enabled", "medium",
-                  "Security Hub is disabled — findings are not centralized.")
+                  "Security Hub is disabled — findings are not centralized.",
+                  control_id="CLOUD-LOG-004")
         cw = d.get("cloudwatch_log_metric_filters") or d.get("cloudwatch_alarms_cis") or {}
         if isinstance(cw, dict) and cw:
             _fail(ctx, f, eng, "aws", _truthy(cw.get("cis_alarms_enabled") or cw.get("enabled")),
                   "CIS CloudWatch metric filters/alarms present", "medium",
-                  "CIS metric filter alarms for root usage / unauthorized API are missing.")
+                  "CIS metric filter alarms for root usage / unauthorized API are missing.",
+                  control_id="CLOUD-LOG-005")
         elif isinstance(cw, list):
             _fail(ctx, f, eng, "aws", len(cw) > 0,
                   "CIS CloudWatch metric filters/alarms present", "medium",
-                  "No CIS CloudWatch metric filters configured.")
+                  "No CIS CloudWatch metric filters configured.",
+                  control_id="CLOUD-LOG-005")
 
     if ctx.az_has():
         d = ctx.azure

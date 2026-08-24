@@ -89,9 +89,15 @@
       <h3>What could have been affected?</h3>
       <p>{{ n.what_could_be_affected }}</p>
       <ul class="mm-affect-list">
-        <li><span>Recommendation</span> {{ ca.recommendation or 'n/a' }}</li>
+        <li><span>Recommendation</span> {{ ca.recommendation_label or ca.recommendation or case.ai_recommendation or 'n/a' }}</li>
+        <li><span>Change risk</span> {{ case.change_risk or ca.change_risk or (ca.remediation_risk.level if ca.remediation_risk is mapping else ca.remediation_risk) or 'n/a' }}</li>
         <li><span>Validation</span> {{ ca.validation_status or 'n/a' }}</li>
-        <li><span>Deployment ready</span> {{ ca.deployment_ready }}</li>
+        {% if ca.deployment_ready is not none %}
+        <li><span>Deployment ready ({{ ca.deployment_ready_scope or 'unscoped' }})</span> {{ ca.deployment_ready }}</li>
+        {% endif %}
+        {% if ca.deployment_ready_note %}
+        <li><span>Readiness note</span> {{ ca.deployment_ready_note }}</li>
+        {% endif %}
       </ul>
     </section>
 

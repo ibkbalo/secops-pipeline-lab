@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-VERSION = "0.1.0-mm1"
+VERSION = "0.2.0-mx1"
 
 AGENT_TITLES = {
     "cloud": "Cloud Security Engineer",
@@ -20,6 +21,7 @@ REC_LABELS = {
     "RECOMMEND_APPROVE": "APPROVE",
     "RECOMMEND_REVIEW": "REVIEW WITH MANAGER",
     "RECOMMEND_REJECT": "DO NOT APPLY",
+    "REMEDIATION_PREREQUISITES_REQUIRED": "PREREQUISITES REQUIRED",
     "NO_ACTION_REQUIRED": "NO ACTION NEEDED",
     "approve": "APPROVE",
     "review": "REVIEW WITH MANAGER",
@@ -38,6 +40,18 @@ INTEGRITY_PLAIN = {
     "LIVE_STATE_CHANGED": "The live environment may have drifted since approval. Revalidation is needed.",
     "DEPENDENCY_CHANGED": "Related dependencies changed after approval.",
     "RECOMMENDATION_CHANGED": "The AI recommendation changed after approval. Please re-review.",
+    "PARTIAL_EXECUTION_CHANGED_STATE": (
+        "Terraform execution partially succeeded and then failed, so live infrastructure "
+        "changed. The previous approval is no longer valid — review the recovery plan."
+    ),
+    "SOURCE_ARTIFACT_CHANGED": "The Terraform source artifact changed after approval.",
+    "SOURCE_ARTIFACT_CHANGED_AFTER_CROSS_CONTROL_ANALYSIS": (
+        "The Terraform source was regenerated after cross-control analysis (e.g. S3 versioning). "
+        "The prior recovery plan is stale — a new plan must be generated and reviewed."
+    ),
+    "ACCOUNT_MISMATCH": "The AWS account for this plan no longer matches the approved target.",
+    "REGION_MISMATCH": "The AWS region for this plan no longer matches the approved target.",
+    "EXECUTION_ROLE_CHANGED": "The intended execution role changed after approval.",
 }
 
 LEARNING_HINTS: dict[str, dict[str, str]] = {
@@ -63,6 +77,22 @@ LEARNING_HINTS: dict[str, dict[str, str]] = {
         "learning": "Without reliable logging, you cannot investigate who changed what — or prove compliance.",
         "before_approve": "Confirm logging destinations and retention meet your retention policy.",
         "why_engineer": "Without CloudTrail, incident response and forensics are severely limited.",
+    },
+    "CLOUD-IAM-013": {
+        "technology": "AWS IAM Access Analyzer evaluates resource policies for external access.",
+        "concept": "Detective control — external access analysis",
+        "learning": (
+            "Without an ACTIVE ACCOUNT analyzer in the Region, external-access paths are not "
+            "continuously analyzed. Absence of an analyzer does not by itself prove a breach."
+        ),
+        "before_approve": (
+            "Confirm the intended Region and that this creates a monitoring/analyzer resource — "
+            "it does not change existing IAM permissions or resource policies."
+        ),
+        "why_engineer": (
+            "Cloud Security Engineers enable Access Analyzer so unexpected cross-account or "
+            "public grants are visible before they become incidents."
+        ),
     },
     "CLOUD-IAM": {
         "technology": "AWS IAM controls who can do what in your cloud account.",
@@ -127,6 +157,25 @@ def agent_title(role: str | None) -> str:
     return AGENT_TITLES.get(str(role or "").strip().lower(), str(role or "Security Agent"))
 
 
+def _artifact_contains_versioning(job: dict[str, Any] | None, finding: dict[str, Any] | None) -> bool:
+    """True when the persisted dedicated TF for this finding includes S3 versioning."""
+    try:
+        fid = str((finding or {}).get("id") or "")
+        res = ((job or {}).get("prerequisite_resolutions") or {}).get(fid) or {}
+        path = Path(str(res.get("artifact_path") or ""))
+        if not path.is_file():
+            # Fall back to kit companion
+            kit = Path(str((job or {}).get("kit_path") or ""))
+            cand = (kit.with_suffix("") if kit.suffix.lower() == ".zip" else kit) / "terraform" / f"{fid}.tf"
+            path = cand if cand.is_file() else path
+        if not path.is_file():
+            return False
+        body = path.read_text(encoding="utf-8", errors="ignore")
+        return 'resource "aws_s3_bucket_versioning"' in body and "Enabled" in body
+    except Exception:
+        return False
+
+
 def translate_recommendation(raw: str | None) -> str:
     if not raw:
         return "REVIEW WITH MANAGER"
@@ -141,8 +190,18 @@ def translate_recommendation(raw: str | None) -> str:
     return key.upper().replace("_", " ")
 
 
-def manager_decision_label(job: dict[str, Any] | None) -> str:
+def manager_decision_label(job: dict[str, Any] | None, finding: dict[str, Any] | None = None) -> str:
     job = job or {}
+    fid = str((finding or {}).get("id") or "")
+    decisions = job.get("finding_decisions") or {}
+    if fid and str(decisions.get(fid) or "").lower() in {"pending_recovery", "pending"}:
+        return "PENDING"
+    if job.get("approval_status") == "APPROVAL_INVALIDATED" and fid:
+        if str(decisions.get(fid) or "").lower() in {"pending_recovery", "pending", ""}:
+            return "PENDING"
+        # Do not show APPROVED when approval was invalidated after partial execution
+        if (job.get("finding_execution") or {}).get(fid):
+            return "PENDING"
     status = str(job.get("status") or "")
     decision = str(job.get("manager_decision") or "")
     if status == "pending_approval" or not decision:
@@ -158,6 +217,29 @@ def manager_decision_label(job: dict[str, Any] | None) -> str:
 
 def execution_label(job: dict[str, Any] | None, impact: dict[str, Any] | None = None) -> str:
     job = job or {}
+    # Prefer per-finding recovery / partial-execution state from impact or job
+    fe = None
+    if isinstance(impact, dict):
+        fe = impact.get("finding_execution") or (impact.get("change_assurance") or {}).get(
+            "finding_execution"
+        )
+    fid = None
+    if isinstance(impact, dict):
+        fid = impact.get("primary_finding_id") or (impact.get("change_assurance") or {}).get(
+            "primary_finding_id"
+        )
+    if isinstance(fe, dict) and fid and isinstance(fe.get(str(fid)), dict):
+        fe = fe.get(str(fid))
+    elif isinstance(fe, dict) and fe.get("execution_status"):
+        pass
+    elif job and fid:
+        fe = (job.get("finding_execution") or {}).get(str(fid))
+    if isinstance(fe, dict) and fe.get("execution_status"):
+        return str(fe["execution_status"])
+    if job.get("apply_status") in {"partial_failed", "partial"}:
+        return "PARTIAL EXECUTION — RECOVERY REQUIRED"
+    if job.get("execution_performed") is True and job.get("approval_status") == "APPROVAL_INVALIDATED":
+        return "PARTIAL EXECUTION — RECOVERY REQUIRED"
     if job.get("execution_performed") is True:
         return "PERFORMED"
     # Safety: even if authorized, Face Manager Mode always stresses not performed unless explicitly set
@@ -244,6 +326,8 @@ def _evidence_proof_block(impact: dict[str, Any] | None, ca: dict[str, Any] | No
     if not direct_items and raw_evidence:
         # Prefer password-policy / preferred live APIs over account summary
         preferred_order = (
+            "describe_configuration_recorder",
+            "configservice",
             "list_analyzers",
             "accessanalyzer",
             "password_policy",
@@ -444,6 +528,45 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None, fi
     scope = str(blast.get("scope") or (impact or {}).get("scope") or "UNKNOWN").replace("_", " ").title()
     level = str(blast.get("level") or "UNKNOWN")
     title_l = str((finding or {}).get("title") or "").lower()
+    reviewed = (
+        (ca or {}).get("reviewed_plan")
+        or (impact or {}).get("reviewed_plan")
+        or ((impact or {}).get("terraform") or {}).get("plan", {}).get("reviewed_plan")
+    )
+    if isinstance(reviewed, dict) and reviewed.get("manager_affect"):
+        ma = reviewed["manager_affect"]
+        risk = reviewed.get("risk") or (ca or {}).get("remediation_risk") or {}
+        return {
+            "scope": ma.get("scope") or scope,
+            "blast_level": (risk.get("level") if isinstance(risk, dict) else level) or level,
+            "level": (risk.get("level") if isinstance(risk, dict) else level) or level,
+            "potentially_affected": ma.get("potentially_affected") or ma.get("summary_line"),
+            "expected_downtime": ma.get("expected_downtime") or "None expected for existing workloads.",
+            "known_dependencies": ma.get("known_dependencies") or [],
+            "unknowns": ma.get("unknowns") or [],
+            "potential_issue": (risk.get("rationale") if isinstance(risk, dict) else None)
+            or ma.get("summary_line"),
+            "summary_line": ma.get("summary_line") or ma.get("potentially_affected"),
+            "plan_create": ma.get("plan_create"),
+            "plan_modify": ma.get("plan_modify"),
+            "plan_destroy": ma.get("plan_destroy"),
+            "resources_to_create": ma.get("resources_to_create") or [],
+            "resources_modified": ma.get("resources_modified") or ["NONE"],
+            "resources_destroyed": ma.get("resources_destroyed") or ["NONE"],
+            "cloudtrail_bucket": ma.get("cloudtrail_bucket") or "NOT TOUCHED",
+            "risk_rationale": (risk.get("rationale") if isinstance(risk, dict) else None),
+            "detail_lines": ma.get("detail_lines") or [],
+            "plan_reviewed": True,
+            "cross_control_impact": (ca or {}).get("cross_control_impact")
+            or (impact or {}).get("cross_control_impact"),
+            "predicted_secondary_findings": (ca or {}).get("predicted_secondary_findings")
+            or (impact or {}).get("predicted_secondary_findings")
+            or [],
+            "remediation_fully_hardened": (ca or {}).get("remediation_fully_hardened")
+            if (ca or {}).get("remediation_fully_hardened") is not None
+            else (impact or {}).get("remediation_fully_hardened"),
+        }
+
     workloads = (impact or {}).get("discovery", {}).get("potentially_affected_workloads") if impact else None
     if "access analyzer" in title_l:
         workloads = (
@@ -456,13 +579,22 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None, fi
             or ""
         ).strip()
         scope = f"Regional ({region})" if region else "Regional"
-    if not workloads:
-        workloads = "Not fully mapped — treat as unknown until confirmed."
+    if not workloads or str(workloads).strip().lower() in {"see change_assurance", "unknown"}:
+        if "config recorder" in title_l or "aws config" in title_l:
+            workloads = (
+                "Creates AWS Config recording infrastructure in-region. "
+                "Does not modify existing CloudTrail buckets or application workloads."
+            )
+        else:
+            workloads = "Not fully mapped — treat as unknown until confirmed."
     deps = (ca or {}).get("dependencies") or (impact or {}).get("dependencies") or []
     dep_names = []
-    for d in deps[:5]:
+    for d in deps[:8]:
         if isinstance(d, dict) and (d.get("id") or d.get("type")):
-            dep_names.append(str(d.get("id") or d.get("type")))
+            label = str(d.get("id") or d.get("type"))
+            if label.lower() in {"none_detected", "none"}:
+                continue
+            dep_names.append(label)
     unknowns = []
     if level in {"UNKNOWN", ""}:
         unknowns.append("Blast radius could not be fully determined.")
@@ -471,14 +603,22 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None, fi
     downtime = "No planned downtime indicated by analysis (still verify with owners)."
     if "access analyzer" in title_l:
         downtime = "None expected for Access Analyzer enablement."
+    elif "config recorder" in title_l or "aws config" in title_l:
+        downtime = "None expected for existing workloads."
     elif level in {"HIGH", "CRITICAL"}:
         downtime = "Possible service impact — coordinate with owners before applying."
     reasons = blast.get("reasons") or []
+    risk_obj = (ca or {}).get("remediation_risk") or (impact or {}).get("remediation_risk") or {}
+    rationale = None
+    if isinstance(risk_obj, dict):
+        rationale = risk_obj.get("rationale") or ((risk_obj.get("reasons") or [None])[0])
     if "access analyzer" in title_l:
         potential = (
             "Creates a monitoring/analyzer resource. It does not modify existing IAM "
             "permissions or resource policies."
         )
+    elif rationale:
+        potential = str(rationale)
     elif reasons:
         potential = str(reasons[0])
     elif "public" in str(workloads).lower():
@@ -491,28 +631,154 @@ def _affect_summary(impact: dict[str, Any] | None, ca: dict[str, Any] | None, fi
         "level": level,
         "potentially_affected": workloads if isinstance(workloads, str) else str(workloads),
         "expected_downtime": downtime,
-        "known_dependencies": dep_names or ["None clearly identified"],
+        "known_dependencies": dep_names or ["No public/website workload dependencies identified"],
         "unknowns": unknowns or ["None flagged"],
         "potential_issue": potential,
         "summary_line": potential if "access analyzer" in title_l else f"Scope: {scope}. {potential}",
+        "risk_rationale": rationale,
+        "plan_reviewed": False,
     }
+
+
+def _current_plan_context(
+    job: dict[str, Any] | None,
+    finding: dict[str, Any] | None,
+    impact: dict[str, Any] | None,
+    ca: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve CURRENT reviewed/recovery plan addresses + already-created resources."""
+    from change_assurance.plan_manager_context import (
+        all_plan_addresses,
+        flags_from_plan_addresses,
+        plan_action_addresses,
+        split_prepare_resources,
+    )
+
+    job = job or {}
+    fid = str((finding or {}).get("id") or "")
+    fe = ((job.get("finding_execution") or {}).get(fid) or {}) if fid else {}
+    reviewed = (
+        (ca or {}).get("reviewed_plan")
+        or (impact or {}).get("reviewed_plan")
+        or ((job.get("reviewed_terraform_plans") or {}).get(fid) if fid else None)
+        or {}
+    )
+    if not isinstance(reviewed, dict):
+        reviewed = {}
+    # Prefer recovery resources bound on finding_execution
+    creates = list(fe.get("recovery_resources") or [])
+    if not creates:
+        groups = plan_action_addresses(reviewed)
+        creates = list(groups.get("create") or [])
+    if not creates:
+        creates = all_plan_addresses(reviewed)
+    already = list(fe.get("succeeded_resources") or [])
+    resolution = (ca or {}).get("prerequisite_resolution") or (impact or {}).get(
+        "prerequisite_resolution"
+    ) or {}
+    split = split_prepare_resources(
+        resolution_resources=list((resolution or {}).get("resources") or []),
+        already_created=already,
+        current_creates=creates if creates else None,
+    )
+    addrs = list(creates) or all_plan_addresses(reviewed)
+    flags = flags_from_plan_addresses(addrs, base_flags={})
+    return {
+        "finding_id": fid,
+        "reviewed_plan": reviewed,
+        "plan_addresses": addrs,
+        "flags": flags,
+        "already_created": split["already_created"],
+        "will_create": split["will_create"],
+        "prepare": split["prepare"],
+        "finding_execution": fe,
+        "lifecycle_recovery": str(
+            fe.get("status")
+            or (ca or {}).get("remediation_lifecycle_state")
+            or (impact or {}).get("remediation_lifecycle_state")
+            or ""
+        ).upper()
+        in {"PARTIAL_EXECUTION", "RECOVERY_REQUIRED"}
+        or str((ca or {}).get("remediation_status") or "").upper() == "RECOVERY_REQUIRED",
+    }
+
+
+def _plan_aware_manager_questions(
+    job: dict[str, Any] | None,
+    finding: dict[str, Any] | None,
+    impact: dict[str, Any] | None,
+    ca: dict[str, Any] | None,
+) -> list[str]:
+    """Prefer CURRENT plan-derived questions; filter stale IAM/break-glass copy."""
+    from change_assurance.plan_manager_context import (
+        filter_stale_manager_questions,
+        manager_questions_for_plan,
+    )
+
+    ctx = _current_plan_context(job, finding, impact, ca)
+    raw = list((ca or {}).get("manager_questions") or (impact or {}).get("manager_questions") or [])
+    # When a reviewed/recovery plan is bound, regenerate from plan actions
+    if ctx["plan_addresses"] or ctx["lifecycle_recovery"]:
+        regenerated = manager_questions_for_plan(
+            finding,
+            flags=ctx["flags"],
+            plan_addresses=ctx["plan_addresses"],
+            discovery=(impact or {}).get("discovery") or (ca or {}).get("discovery") or {},
+            evidence_assessment=(ca or {}).get("evidence_assessment")
+            or (impact or {}).get("evidence_assessment"),
+        )
+        if regenerated:
+            return [str(q).replace("MANAGER CONTEXT REQUIRED:", "").strip() for q in regenerated]
+    filtered = filter_stale_manager_questions(
+        raw,
+        plan_addresses=ctx["plan_addresses"],
+        flags=ctx["flags"],
+    )
+    return [str(q).replace("MANAGER CONTEXT REQUIRED:", "").strip() for q in filtered]
 
 
 def _why_recommend(
     finding: dict[str, Any],
     impact: dict[str, Any] | None,
     ca: dict[str, Any] | None,
+    *,
+    job: dict[str, Any] | None = None,
 ) -> str:
     rec = str((impact or {}).get("recommendation") or (ca or {}).get("recommendation") or "RECOMMEND_REVIEW")
     status = str((impact or {}).get("finding_status") or "")
     reasons = list((ca or {}).get("recommendation_reasons") or (impact or {}).get("readiness", {}).get("reasons") or [])
-    questions = (ca or {}).get("manager_questions") or []
+    questions = _plan_aware_manager_questions(job, finding, impact, ca) if job is not None else (
+        (ca or {}).get("manager_questions") or []
+    )
     val = str((ca or {}).get("validation_status") or ((impact or {}).get("terraform") or {}).get("validate", {}).get("status") or "")
     risk = ((ca or {}).get("remediation_risk") or (impact or {}).get("remediation_risk") or {})
     risk_level = risk.get("level") if isinstance(risk, dict) else risk
 
     if status == "ALREADY_REMEDIATED" or rec == "NO_ACTION_REQUIRED":
         return "Live checks suggest the issue may already be fixed, so no further change is needed right now."
+
+    ready = _artifact_readiness_block(impact, ca, job=job, finding=finding)
+    if ready.get("remediation_status") == "RECOVERY_REQUIRED":
+        return (
+            "Human context is required because a recovery plan is pending review after partial "
+            "execution — confirm remaining creates, Config scope/delivery, and cost before approval."
+        )
+    if ready.get("remediation_status") == "PREREQUISITES_RESOLVED":
+        return (
+            "Manager selected CREATE DEDICATED RESOURCES. Sentinel prepared complete AWS Config "
+            "Terraform (service-linked role, dedicated bucket/policy, recorder, delivery channel, "
+            "enablement) with no REPLACE_* placeholders. This does not apply anything — "
+            "validate, plan, approve, then human-triggered apply are still required."
+        )
+    if rec == "REMEDIATION_PREREQUISITES_REQUIRED" or ready.get("has_placeholders"):
+        missing = ready.get("missing_prerequisite_labels") or ready.get("unresolved_placeholders") or []
+        miss_txt = ", ".join(str(x) for x in missing[:4] if str(x) != "NONE")
+        return (
+            "Remediation prerequisites are required before this change is execution-ready"
+            + (f": {miss_txt}." if miss_txt else ".")
+            + " Manager must choose reuse of approved resources or dedicated creation — "
+            "Sentinel will not invent or auto-create them."
+        )
 
     if questions or (ca or {}).get("manager_context_required"):
         q = str(questions[0]).replace("MANAGER CONTEXT REQUIRED:", "").strip() if questions else (
@@ -521,7 +787,6 @@ def _why_recommend(
         return f"Human context is required because the system cannot decide alone: {q}"
 
     if rec == "RECOMMEND_REJECT":
-        ready = _artifact_readiness_block(impact, ca)
         # Never blame this finding on unrelated kit placeholders
         if ready.get("has_placeholders"):
             detail = "unresolved placeholders in this finding's remediation artifacts"
@@ -578,7 +843,13 @@ def _after_change(finding: dict[str, Any], impact: dict[str, Any] | None, ca: di
     )
 
 
-def _artifact_readiness_block(impact: dict[str, Any] | None, ca: dict[str, Any] | None) -> dict[str, Any]:
+def _artifact_readiness_block(
+    impact: dict[str, Any] | None,
+    ca: dict[str, Any] | None,
+    *,
+    job: dict[str, Any] | None = None,
+    finding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Manager-facing relevant artifacts + placeholders for the finding under review."""
     relevant = list(
         (ca or {}).get("relevant_artifacts")
@@ -615,9 +886,143 @@ def _artifact_readiness_block(impact: dict[str, Any] | None, ca: dict[str, Any] 
             unresolved.append(str(p))
     # Prefer scoped paths; if missing, try terraform analysis files when scoped
     if not relevant:
-        analysis_files = ((tf.get("validate") or {}) if isinstance(tf, dict) else {})
         # no whole-kit listing
         relevant = list(scope.get("paths") or [])
+
+    prerequisites = list(
+        (ca or {}).get("remediation_prerequisites")
+        or (impact or {}).get("remediation_prerequisites")
+        or []
+    )
+    if not prerequisites and placeholders:
+        try:
+            from change_assurance.prerequisites import prerequisites_from_placeholders
+
+            prerequisites = prerequisites_from_placeholders(placeholders)
+        except Exception:
+            prerequisites = []
+
+    remediation_status = str(
+        (ca or {}).get("remediation_status") or (impact or {}).get("remediation_status") or ""
+    ).upper()
+    if not remediation_status:
+        remediation_status = "PREREQUISITES_REQUIRED" if placeholders else "NOT_READY"
+
+    # Persistent remediation lifecycle overrides (cross-job continuity)
+    lifecycle = {}
+    # job is optional — callers may pass via impact["_job"] when available
+    job_ref = job or ((impact or {}).get("_job") if isinstance(impact, dict) else None)
+    if isinstance(job_ref, dict):
+        lifecycle = job_ref.get("remediation_lifecycle") or {}
+    lifecycle_state = str(
+        (ca or {}).get("remediation_lifecycle_state")
+        or (impact or {}).get("remediation_lifecycle_state")
+        or lifecycle.get("remediation_state")
+        or ""
+    ).upper()
+    existence = list(
+        (ca or {}).get("prerequisite_existence")
+        or (impact or {}).get("prerequisite_existence")
+        or []
+    )
+    if not existence and isinstance(lifecycle.get("prerequisite_resources"), dict):
+        label_map = {
+            "aws_iam_service_linked_role.config": "AWS Config IAM role",
+            "aws_s3_bucket.config": "S3 delivery bucket (Config)",
+        }
+        for addr, row in (lifecycle.get("prerequisite_resources") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            existence.append(
+                {
+                    "address": addr,
+                    "label": label_map.get(addr, addr),
+                    "status": row.get("status"),
+                    "evidence_quality": row.get("evidence_quality"),
+                    "evidence_source": row.get("evidence_source"),
+                    "identity": row.get("identity"),
+                }
+            )
+    if (ca or {}).get("suppress_placeholder_prerequisites") or lifecycle_state in {
+        "PARTIAL_EXECUTION",
+        "RECOVERY_REQUIRED",
+    }:
+        placeholders = []
+        unresolved = ["NONE"]
+        prerequisites = []
+        if remediation_status == "PREREQUISITES_REQUIRED":
+            remediation_status = "RECOVERY_REQUIRED"
+        if not remediation_status or remediation_status == "NOT_READY":
+            remediation_status = "RECOVERY_REQUIRED"
+
+    prereq_decision = (ca or {}).get("prerequisite_decision") or (impact or {}).get("prerequisite_decision")
+    resolution = (ca or {}).get("prerequisite_resolution") or (impact or {}).get("prerequisite_resolution") or {}
+    decision = (ca or {}).get("prerequisite_manager_decision") or (impact or {}).get(
+        "prerequisite_manager_decision"
+    )
+    if remediation_status in {"PREREQUISITES_RESOLVED", "RECOVERY_REQUIRED"} or (
+        isinstance(prereq_decision, dict)
+        and str(prereq_decision.get("choice") or "").upper() in {"CREATE_DEDICATED", "CREATE_DEDICATED_RESOURCES"}
+        and not placeholders
+    ):
+        decision = decision or "CREATE DEDICATED RESOURCES"
+        if remediation_status == "PREREQUISITES_REQUIRED":
+            remediation_status = "PREREQUISITES_RESOLVED"
+    elif not decision and prerequisites:
+        try:
+            from change_assurance.prerequisites import manager_decision_prompt
+
+            decision = manager_decision_prompt(prerequisites)
+        except Exception:
+            decision = "Resolve missing prerequisites before treating this change as execution-ready."
+
+    plan_ctx = _current_plan_context(
+        job_ref if isinstance(job_ref, dict) else None, finding, impact, ca
+    )
+    prepare = list(plan_ctx.get("prepare") or [])
+    already_created = list(plan_ctx.get("already_created") or [])
+    will_create = list(plan_ctx.get("will_create") or [])
+    if not prepare and not already_created and remediation_status in {
+        "PREREQUISITES_RESOLVED",
+        "RECOVERY_REQUIRED",
+    }:
+        from change_assurance.plan_manager_context import split_prepare_resources
+
+        split = split_prepare_resources(
+            resolution_resources=list((resolution or {}).get("resources") or []),
+            already_created=already_created,
+            current_creates=None,
+        )
+        prepare = split["prepare"]
+        will_create = split["will_create"]
+        already_created = split["already_created"] or already_created
+    if (
+        not prepare
+        and not will_create
+        and remediation_status == "PREREQUISITES_RESOLVED"
+        and not already_created
+    ):
+        prepare = [
+            "AWS Config service-linked role",
+            "dedicated encrypted/private S3 delivery bucket",
+            "Config bucket policy",
+            "configuration recorder",
+            "delivery channel",
+            "recorder enablement",
+        ]
+        will_create = list(prepare)
+
+    missing_labels = [
+        str(p.get("label") or p.get("token")) for p in prerequisites if isinstance(p, dict)
+    ]
+    # Prefer existence evidence — never list EXISTS resources as Missing
+    if existence:
+        missing_labels = [
+            str(e.get("label"))
+            for e in existence
+            if str(e.get("status") or "").upper() == "MISSING"
+        ]
+
     return {
         "relevant_artifacts": relevant or ["—"],
         "unresolved_placeholders": unresolved or ["NONE"],
@@ -627,6 +1032,59 @@ def _artifact_readiness_block(impact: dict[str, Any] | None, ca: dict[str, Any] 
         ],
         "mapping": scope.get("mapping") or "",
         "job_fully_approvable": (ca or {}).get("job_fully_approvable"),
+        "prerequisites": prerequisites,
+        "missing_prerequisite_labels": missing_labels,
+        "prerequisite_existence": existence,
+        "remediation_status": remediation_status,
+        "remediation_lifecycle_state": lifecycle_state or None,
+        "execution_ready": bool((ca or {}).get("execution_ready") or (impact or {}).get("execution_ready"))
+        and not placeholders
+        and remediation_status not in {"PREREQUISITES_REQUIRED"},
+        "manager_decision_prompt": decision,
+        "prerequisite_decision": prereq_decision,
+        "prerequisite_choice": (
+            (prereq_decision or {}).get("choice") if isinstance(prereq_decision, dict) else None
+        ),
+        "prepare": prepare,
+        "already_created": already_created,
+        "will_create": will_create,
+        "cost_note": (ca or {}).get("cost_note")
+        or (impact or {}).get("cost_note")
+        or (resolution or {}).get("cost_note"),
+        "do_not_touch": (ca or {}).get("do_not_touch")
+        or (impact or {}).get("do_not_touch")
+        or (resolution or {}).get("do_not_touch")
+        or [],
+        "required_remediation_role_permissions": (ca or {}).get("required_remediation_role_permissions")
+        or (impact or {}).get("required_remediation_role_permissions")
+        or (resolution or {}).get("required_remediation_role_permissions")
+        or [],
+        "what_will_change": (
+            (
+                "Create the remaining AWS Config infrastructure in the current recovery plan "
+                "(already-created resources are not recreated)."
+                if remediation_status == "RECOVERY_REQUIRED" and already_created
+                else "Create the supporting AWS Config infrastructure required to begin recording "
+                "configuration changes in the finding Region."
+            )
+            if remediation_status in {"PREREQUISITES_RESOLVED", "RECOVERY_REQUIRED"}
+            else None
+        ),
+        "what_will_not_change": (ca or {}).get("do_not_touch")
+        or (resolution or {}).get("do_not_touch")
+        or [],
+        # Persisted-artifact binding (source of truth for stale-kit diagnosis)
+        "kit_generation_id": (resolution or {}).get("kit_generation_id")
+        or (ca or {}).get("kit_generation_id")
+        or (impact or {}).get("kit_generation_id"),
+        "artifact_path": (resolution or {}).get("artifact_path")
+        or (ca or {}).get("artifact_path"),
+        "artifact_sha256": (resolution or {}).get("artifact_sha256")
+        or (ca or {}).get("artifact_sha256"),
+        "artifact_generated_at": (resolution or {}).get("artifact_generated_at")
+        or (ca or {}).get("artifact_generated_at"),
+        "persistence_verified": bool((resolution or {}).get("persistence_verified")),
+        "kit_path": (resolution or {}).get("kit_path") or (ca or {}).get("kit_path"),
     }
 
 
@@ -666,7 +1124,19 @@ def _ai_checks(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[
             "label": (
                 "Unresolved placeholders: NONE"
                 if not ready["has_placeholders"]
-                else "Unresolved placeholders: " + "; ".join(ready["unresolved_placeholders"][:3])
+                else "Unresolved placeholders: PRESENT — "
+                + "; ".join(ready["unresolved_placeholders"][:3])
+            ),
+        },
+        {
+            "ok": ready.get("remediation_status") not in {"PREREQUISITES_REQUIRED"},
+            "label": (
+                f"Remediation status: {ready.get('remediation_status') or 'NOT_READY'}"
+                + (
+                    " — Missing: " + ", ".join(ready.get("missing_prerequisite_labels") or [])
+                    if ready.get("missing_prerequisite_labels")
+                    else ""
+                )
             ),
         },
         {
@@ -674,6 +1144,13 @@ def _ai_checks(finding: dict[str, Any], impact: dict[str, Any] | None, ca: dict[
             "label": "Relevant remediation artifacts: " + ", ".join(str(x) for x in ready["relevant_artifacts"][:4]),
         },
     ]
+    if ready.get("manager_decision_prompt") and ready.get("has_placeholders"):
+        checks.append(
+            {
+                "ok": False,
+                "label": "What must the manager decide? " + str(ready["manager_decision_prompt"]),
+            }
+        )
     if ready.get("sibling_placeholders"):
         checks.append(
             {
@@ -740,6 +1217,50 @@ def _cross_agent_plain(ca: dict[str, Any] | None) -> list[str]:
     return out
 
 
+def _as_ca_dict(impact: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize change_assurance nest — never treat a bool/legacy flag as a mapping."""
+    raw = (impact or {}).get("change_assurance")
+    if isinstance(raw, dict):
+        return raw
+    raw2 = (impact or {}).get("change_assurance_report")
+    if isinstance(raw2, dict):
+        return raw2
+    # Top-level mirrors from legacy impact documents
+    out: dict[str, Any] = {}
+    for key in (
+        "evidence",
+        "evidence_assessment",
+        "evidence_quality",
+        "relevant_artifacts",
+        "relevant_placeholders",
+        "remediation_prerequisites",
+        "prerequisite_manager_decision",
+        "prerequisite_decision",
+        "prerequisite_resolution",
+        "remediation_status",
+        "execution_ready",
+        "cost_note",
+        "do_not_touch",
+        "required_remediation_role_permissions",
+        "sibling_placeholder_artifacts",
+        "artifact_scope",
+        "verification",
+        "recommendation",
+        "manager_questions",
+        "manager_context_required",
+        "validation_status",
+        "remediation_risk",
+        "approval_integrity",
+        "primary_finding_id",
+        "finding_status",
+        "analysis_logic_version",
+        "deployment_ready",
+    ):
+        if impact and key in impact and impact.get(key) is not None:
+            out[key] = impact.get(key)
+    return out
+
+
 def build_manager_card(
     finding: dict[str, Any],
     job: dict[str, Any],
@@ -747,7 +1268,56 @@ def build_manager_card(
     *,
     is_primary: bool = False,
 ) -> dict[str, Any]:
-    ca = (impact or {}).get("change_assurance") or (impact or {}).get("change_assurance_report") or {}
+    # Enrich impact with job execution/recovery state for accurate Manager Mode
+    if is_primary:
+        impact = dict(impact or {})
+        impact.setdefault("primary_finding_id", finding.get("id"))
+        impact["_job"] = job
+        if job.get("finding_execution"):
+            impact["finding_execution"] = job.get("finding_execution")
+            ca_nest = dict(impact.get("change_assurance") or {})
+            ca_nest["finding_execution"] = job.get("finding_execution")
+            impact["change_assurance"] = ca_nest
+        if job.get("remediation_lifecycle"):
+            impact["remediation_lifecycle_state"] = (
+                job["remediation_lifecycle"].get("remediation_state")
+            )
+            ca_nest = dict(impact.get("change_assurance") or {})
+            ca_nest["remediation_lifecycle_state"] = impact["remediation_lifecycle_state"]
+            # Surface existence into CA so readiness block can render EXISTS
+            pr = job["remediation_lifecycle"].get("prerequisite_resources") or {}
+            if pr and not ca_nest.get("prerequisite_existence"):
+                label_map = {
+                    "aws_iam_service_linked_role.config": "AWS Config IAM role",
+                    "aws_s3_bucket.config": "S3 delivery bucket (Config)",
+                }
+                ca_nest["prerequisite_existence"] = [
+                    {
+                        "address": addr,
+                        "label": label_map.get(addr, addr),
+                        "status": (row or {}).get("status"),
+                        "evidence_quality": (row or {}).get("evidence_quality"),
+                        "evidence_source": (row or {}).get("evidence_source"),
+                        "identity": (row or {}).get("identity"),
+                    }
+                    for addr, row in pr.items()
+                    if isinstance(row, dict)
+                ]
+                ca_nest["suppress_placeholder_prerequisites"] = True
+            impact["change_assurance"] = ca_nest
+            impact["prerequisite_existence"] = ca_nest.get("prerequisite_existence")
+            impact["suppress_placeholder_prerequisites"] = True
+    ca = _as_ca_dict(impact) if is_primary else {}
+    # Refuse to present another finding's assurance bundle as this finding's proof
+    if is_primary and impact:
+        bound = str(
+            (impact or {}).get("primary_finding_id")
+            or ca.get("primary_finding_id")
+            or ""
+        )
+        if bound and finding.get("id") and str(finding.get("id")) != bound:
+            impact = None
+            ca = {}
     role = str(job.get("role") or "")
     sev = str(finding.get("severity") or "info").upper()
     risk = (ca.get("remediation_risk") if is_primary else None) or (impact or {}).get("remediation_risk") or {}
@@ -768,6 +1338,25 @@ def build_manager_card(
     already = status == "ALREADY_REMEDIATED" or raw_rec == "NO_ACTION_REQUIRED"
 
     integ = ca.get("approval_integrity") or (impact or {}).get("approval_integrity") or {}
+    # Job-level invalidated approval after partial execution takes precedence
+    job_binding = job.get("approval_binding") if isinstance(job.get("approval_binding"), dict) else {}
+    if is_primary and (
+        job.get("approval_status") == "APPROVAL_INVALIDATED"
+        or str(job_binding.get("status") or "") == "APPROVAL_INVALIDATED"
+    ):
+        integ = {
+            "status": "APPROVAL_INVALIDATED",
+            "integrity": "INVALIDATED",
+            "valid": False,
+            "reasons": list(
+                job_binding.get("invalidation_reasons")
+                or job_binding.get("reasons")
+                or ["PARTIAL_EXECUTION_CHANGED_STATE"]
+            ),
+            "reason": job_binding.get("invalidation_detail")
+            or job_binding.get("reason")
+            or "PARTIAL_EXECUTION_CHANGED_STATE",
+        }
     integ_plain = integrity_plain_english(integ) if is_primary else {
         "headline": "AWAITING YOUR DECISION",
         "message": "",
@@ -777,9 +1366,85 @@ def build_manager_card(
     }
 
     questions = []
-    if is_primary and (ca.get("manager_context_required") or (impact or {}).get("manager_context_required")):
-        for q in ca.get("manager_questions") or []:
-            questions.append(str(q).replace("MANAGER CONTEXT REQUIRED:", "").strip())
+    if is_primary:
+        plan_qs = _plan_aware_manager_questions(job, finding, impact, ca)
+        ctx_required = bool(
+            ca.get("manager_context_required") or (impact or {}).get("manager_context_required")
+        )
+        fe_row = (job.get("finding_execution") or {}).get(str(finding.get("id") or "")) or {}
+        recovery = str(fe_row.get("status") or "").upper() in {
+            "RECOVERY_REQUIRED",
+            "PARTIAL_EXECUTION",
+        } or str((ca or {}).get("remediation_status") or "").upper() == "RECOVERY_REQUIRED"
+        if ctx_required or recovery or plan_qs:
+            questions = plan_qs
+
+    # Control-specific Manager teaching block (deterministic metadata — no LLM)
+    understanding = None
+    if is_primary:
+        try:
+            import manager_explanations as mx
+
+            preview = ""
+            arts = ca.get("artifacts") or (impact or {}).get("artifacts") or []
+            if arts and isinstance(arts[0], dict):
+                preview = str(arts[0].get("content_preview") or "")
+                if not preview:
+                    preview = " ".join(str(x) for x in (arts[0].get("source_files") or [])[:6])
+            if not preview:
+                preview = " ".join(
+                    str(x)
+                    for x in (
+                        ca.get("relevant_artifacts")
+                        or (impact or {}).get("relevant_artifacts")
+                        or []
+                    )[:6]
+                )
+            understanding = mx.build_understanding(
+                finding,
+                impact if is_primary else None,
+                ca if is_primary else None,
+                artifact_preview=preview,
+            )
+        except Exception as exc:
+            understanding = {
+                "available": False,
+                "errors": [f"EXPLANATION_BUILD_FAILED: {exc}"],
+                "safe_to_present": False,
+            }
+
+    # Prefer control-specific learning fields when understanding is available
+    learning = _learning(finding, role)
+    if understanding and understanding.get("available") and understanding.get("safe_to_present"):
+        learning = {
+            "technology": understanding.get("what_is_this") or learning.get("technology"),
+            "concept": understanding.get("security_concept") or learning.get("concept"),
+            "learning": understanding.get("why_care") or learning.get("learning"),
+            "before_approve": "; ".join(understanding.get("manager_prechecks") or [])
+            or learning.get("before_approve"),
+            "why_engineer": understanding.get("realistic_example") or learning.get("why_engineer"),
+        }
+
+    # Prefer control-specific why/after/what_change when safe
+    why_matters = _why_matters(finding, impact if is_primary else None)
+    what_change = _what_change(finding, impact if is_primary else None, ca if is_primary else None)
+    after_change = _after_change(finding, impact if is_primary else None, ca if is_primary else None)
+    if understanding and understanding.get("safe_to_present"):
+        if understanding.get("why_care"):
+            why_matters = str(understanding["why_care"])
+            if understanding.get("absence_does_not_prove"):
+                why_matters = why_matters + " " + str(understanding["absence_does_not_prove"])
+        if understanding.get("fix_will_do"):
+            what_change = str(understanding["fix_will_do"])
+        if understanding.get("how_we_verify"):
+            after_change = str(understanding["how_we_verify"])
+        if understanding.get("what_sentinel_found"):
+            # Keep short summary for the first question; full block is separate
+            pass
+
+    what_found = _what_found(finding, role)
+    if understanding and understanding.get("safe_to_present") and understanding.get("what_sentinel_found"):
+        what_found = str(understanding["what_sentinel_found"])
 
     return {
         "finding_id": finding.get("id"),
@@ -787,34 +1452,119 @@ def build_manager_card(
         "severity": sev,
         "security_severity": sev,
         "change_risk": change_risk,
+        "change_risk_rationale": (
+            (risk.get("rationale") if isinstance(risk, dict) else None)
+            or ((risk.get("reasons") or [None])[0] if isinstance(risk, dict) else None)
+        ),
         "agent": agent_title(role),
         "agent_role": role,
         "is_primary": is_primary,
         "already_remediated": already,
-        "what_found": _what_found(finding, role),
-        "why_matters": _why_matters(finding, impact if is_primary else None),
-        "what_change": _what_change(finding, impact if is_primary else None, ca if is_primary else None),
+        "what_found": what_found,
+        "why_matters": why_matters,
+        "what_change": what_change,
         "affect": _affect_summary(impact if is_primary else None, ca if is_primary else None, finding),
-        "why_recommend": _why_recommend(finding, impact if is_primary else None, ca if is_primary else None),
-        "after_change": _after_change(finding, impact if is_primary else None, ca if is_primary else None),
+        "why_recommend": _why_recommend(
+            finding, impact if is_primary else None, ca if is_primary else None, job=job if is_primary else None
+        ),
+        "after_change": after_change,
         "evidence_proof": _evidence_proof_block(impact if is_primary else None, ca if is_primary else None)
         if is_primary
         else None,
+        "understanding": understanding,
         "ai_checks": _ai_checks(finding, impact if is_primary else None, ca if is_primary else None) if is_primary else [],
-        "artifact_readiness": _artifact_readiness_block(impact, ca) if is_primary else None,
+        "artifact_readiness": (
+            _artifact_readiness_block(impact, ca, job=job, finding=finding) if is_primary else None
+        ),
         "recommendation_raw": raw_rec,
         "recommendation_label": translate_recommendation(raw_rec),
-        "manager_decision": manager_decision_label(job),
+        "manager_decision": manager_decision_label(job, finding),
         "execution": execution_label(job, impact),
+        "finding_execution": (
+            ((job.get("finding_execution") or {}).get(str(finding.get("id") or "")) if is_primary else None)
+        ),
+        "source_artifact_sha256": (
+            (
+                ((job.get("reviewed_terraform_plans") or {}).get(str(finding.get("id") or "")) or {}).get(
+                    "source_artifact_sha256"
+                )
+                or ((job.get("finding_execution") or {}).get(str(finding.get("id") or "")) or {}).get(
+                    "source_artifact_sha256"
+                )
+            )
+            if is_primary
+            else None
+        ),
+        "cross_control_impact": (
+            (ca.get("cross_control_impact") if is_primary else None)
+            or ((impact or {}).get("cross_control_impact") if is_primary else None)
+        ),
+        "predicted_secondary_findings": (
+            list(
+                (ca.get("predicted_secondary_findings") if is_primary else None)
+                or ((impact or {}).get("predicted_secondary_findings") if is_primary else None)
+                or []
+            )
+        ),
+        "cross_control_note": (
+            (
+                "S3 versioning addressed in proposed recovery plan"
+                if is_primary
+                and (
+                    ((job.get("finding_execution") or {}).get(str(finding.get("id") or "")) or {}).get(
+                        "cross_control_versioning_addressed"
+                    )
+                    or any(
+                        "aws_s3_bucket_versioning"
+                        in str(a)
+                        for a in (
+                            ((job.get("finding_execution") or {}).get(str(finding.get("id") or "")) or {}).get(
+                                "recovery_resources"
+                            )
+                            or []
+                        )
+                    )
+                )
+                else (
+                    "S3 versioning requirement addressed in newly generated Terraform"
+                    if is_primary
+                    and _artifact_contains_versioning(job, finding)
+                    and (
+                        ((job.get("finding_execution") or {}).get(str(finding.get("id") or "")) or {}).get(
+                            "recovery_plan_status"
+                        )
+                        == "PLAN_REGENERATION_REQUIRED"
+                        or ((job.get("reviewed_terraform_plans") or {}).get(str(finding.get("id") or "")) or {}).get(
+                            "status"
+                        )
+                        == "PLAN_REGENERATION_REQUIRED"
+                    )
+                    else None
+                )
+            )
+        ),
+        "remediation_fully_hardened": (
+            (ca.get("remediation_fully_hardened") if is_primary else None)
+            if (ca.get("remediation_fully_hardened") is not None if is_primary else True)
+            else ((impact or {}).get("remediation_fully_hardened") if is_primary else None)
+        ),
         "approval_integrity": integ_plain,
         "manager_input_needed": bool(questions),
         "manager_questions": questions,
-        "learning": _learning(finding, role),
+        "learning": learning,
         "cross_agent": _cross_agent_plain(ca) if is_primary else [],
         "banner": (
             "ALREADY FIXED"
             if already
             else f"{sev} SECURITY ISSUE"
+        ),
+        "needs_more_investigation": bool(
+            is_primary
+            and (
+                status in {"UNVERIFIED", "ERROR", "UNKNOWN", ""}
+                or str((ca.get("evidence_assessment") or {}).get("evidence_quality") or "").upper()
+                in {"INSUFFICIENT", "ERROR", "UNAVAILABLE"}
+            )
         ),
     }
 
@@ -860,7 +1610,7 @@ def build_manager_view(
     focus_finding_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the Manager Mode payload for Face."""
-    ca = (impact or {}).get("change_assurance") or (impact or {}).get("change_assurance_report") or {}
+    ca = _as_ca_dict(impact)
     primary_id = focus_finding_id or (impact or {}).get("primary_finding_id") or ca.get("primary_finding_id")
     primary = None
     if primary_id:
@@ -892,7 +1642,7 @@ def build_manager_view(
         "summary": build_job_summary(job, findings, impact),
         "primary": primary_card,
         "finding_rows": cards,
-        "manager_decision": manager_decision_label(job),
+        "manager_decision": manager_decision_label(job, primary),
         "execution": execution_label(job, impact),
         "recommendation_label": primary_card["recommendation_label"],
         "recommendation_raw": primary_card["recommendation_raw"],
