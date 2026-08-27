@@ -588,7 +588,16 @@ def assure_job(
         report["blast_radius"]["scope"] = scope
     report["remediation_risk"] = risk
     report["manager_questions"] = questions
-    report["manager_context_required"] = bool(questions) or (
+    try:
+        from change_assurance.recommendations import _blocking_manager_questions
+
+        blocking_qs = _blocking_manager_questions(questions)
+    except Exception:
+        blocking_qs = [q for q in (questions or []) if "MANAGER CONTEXT REQUIRED" in str(q).upper()]
+    report["manager_considerations"] = [
+        q for q in (questions or []) if q not in blocking_qs
+    ]
+    report["manager_context_required"] = bool(blocking_qs) or (
         adapter.capability_status().get("status") not in {"AVAILABLE"}
     )
     report["verification"] = verification
@@ -655,22 +664,34 @@ def assure_job(
         artifact_mapping_uncertain=mapping_uncertain,
     )
     if sibling_placeholders and rec.get("recommendation") == "RECOMMEND_APPROVE":
-        # Finding may be an approve candidate, but whole-job must not be fully green
+        # Whole-job is not fully approvable, but THIS finding's recommendation stays.
+        # Sibling REPLACE_* must not demote finding-scoped readiness / APPROVE → REVIEW.
         rec = dict(rec)
-        rec["recommendation"] = "RECOMMEND_REVIEW"
-        rec["deployment_ready"] = False
         rec["reasons"] = list(rec.get("reasons") or []) + [
-            "JOB_HAS_UNRESOLVED_SIBLING_ARTIFACTS — other findings in this kit still have REPLACE_* placeholders"
+            "JOB_HAS_UNRESOLVED_SIBLING_ARTIFACTS — other findings in this kit still have REPLACE_* "
+            "placeholders (blocks whole-job approval only; this finding remains independently reviewable)"
         ]
     report["recommendation"] = rec["recommendation"]
-    report["deployment_ready"] = bool(rec.get("deployment_ready")) and not sibling_placeholders
+    # Finding-scoped deployment readiness: siblings do not clear this finding's READY state
+    report["deployment_ready"] = bool(rec.get("deployment_ready"))
     report["recommendation_reasons"] = rec.get("reasons") or []
+    report["manager_considerations"] = list(rec.get("manager_considerations") or [])
     report["remediation_status"] = rec.get("remediation_status") or (
         "PREREQUISITES_REQUIRED"
         if placeholders
         else ("READY" if report["deployment_ready"] else "NOT_READY")
     )
     report["execution_ready"] = bool(rec.get("execution_ready", report["deployment_ready"])) and not placeholders
+    # Re-apply cross-control blocking conflicts after recommend() (recommend overwrites earlier flags)
+    xctrl = report.get("cross_control_impact") or {}
+    if isinstance(xctrl, dict) and xctrl.get("has_blocking_conflicts"):
+        report["recommendation"] = "RECOMMEND_REVIEW"
+        report["deployment_ready"] = False
+        report["remediation_status"] = "NOT_READY"
+        report["execution_ready"] = False
+        report["recommendation_reasons"] = list(report.get("recommendation_reasons") or []) + [
+            "CROSS_CONTROL_CONFLICTS_PREDICTED — proposed resources would fail other Sentinel controls"
+        ]
     report["relevant_artifacts"] = validation.get("relevant_artifacts") or artifact_scope.get("paths") or files
     report["relevant_placeholders"] = validation.get("placeholders") or changes.get("placeholders") or []
     try:
@@ -737,6 +758,25 @@ def assure_job(
     report["job_fully_approvable"] = (
         bool(rec.get("deployment_ready")) and not sibling_placeholders and not placeholders
     )
+    # Generic execution-capability preflight + bootstrap (never self-escalation)
+    try:
+        from change_assurance.capabilities import apply_capability_to_report
+
+        apply_capability_to_report(report, job, primary, run_live_probe=True)
+        # Surface required actions for Manager Mode without coupling to finding TF
+        cap = report.get("execution_capability") or {}
+        if cap.get("required_permissions"):
+            report["required_remediation_role_permissions"] = [
+                p.get("action") for p in (cap.get("required_permissions") or []) if p.get("action")
+            ]
+    except Exception as cap_exc:
+        report.setdefault(
+            "execution_capability",
+            {"state": "UNVERIFIABLE", "error": str(cap_exc)[:300]},
+        )
+        report["permission_ready"] = "UNVERIFIABLE"
+        report["execution_ready"] = False
+        report["execution_gate"] = "BLOCKED_PENDING_CAPABILITY"
     report["artifact_scope"] = artifact_scope
     report["manager_approval_required"] = True
     report["auto_apply_forbidden"] = True
@@ -1218,6 +1258,23 @@ def load_or_assure(
         )
         persist_assurance(workspace, report)
         _persist_finding_assurance(workspace, job_id, want, report)
+    else:
+        # Soft capability refresh: unresolved MISSING/UNVERIFIABLE must re-probe
+        # after external admin bootstrap without requiring cache deletion.
+        try:
+            from change_assurance.capabilities import (
+                apply_capability_to_report,
+                capability_needs_reprobe,
+            )
+
+            cap = report.get("execution_capability") or {}
+            if capability_needs_reprobe(cap):
+                primary = focus_finding or {}
+                apply_capability_to_report(report, job, primary, run_live_probe=True)
+                persist_assurance(workspace, report)
+                _persist_finding_assurance(workspace, job_id, want, report)
+        except Exception:
+            pass
 
     # Always re-check approval integrity against current artifacts + sealed binding
     sealed = approval_integrity.load_binding(workspace, job_id) or job.get("approval_binding")

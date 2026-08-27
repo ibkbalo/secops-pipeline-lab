@@ -87,6 +87,62 @@ def _config_recorder_enabled(observed: dict) -> tuple[bool | None, str]:
     return None, f"recorder present in {region} but recording status unavailable"
 
 
+def _guardduty_detector_enabled(observed: dict) -> tuple[bool | None, str]:
+    """
+    CLOUD-LOG-003: GuardDuty must have an ENABLED detector in the Region.
+    Empty DetectorIds → FAIL. SubscriptionRequiredException (semantic) → FAIL.
+    """
+    if not isinstance(observed, dict):
+        return None, "observed value missing"
+    region = observed.get("region") or "unknown-region"
+
+    # Semantic control-state from known AWS exceptions (not a transport/permission failure)
+    if observed.get("semantic") or observed.get("control_state") == "SERVICE_NOT_SUBSCRIBED":
+        human = observed.get("human_observed") or (
+            f"Amazon GuardDuty is not subscribed/enabled in {region}"
+        )
+        return False, str(human)
+    code = str(observed.get("code") or observed.get("error_code") or "")
+    if "SubscriptionRequired" in code or "subscriptionrequired" in str(
+        observed.get("error") or ""
+    ).lower():
+        return False, (
+            observed.get("human_observed")
+            or f"Amazon GuardDuty is not subscribed/enabled in {region}"
+        )
+
+    if observed.get("error") and not observed.get("DetectorIds") and observed.get("detectors") is None:
+        # Non-semantic API error — cannot evaluate
+        return None, str(observed.get("error") or "GuardDuty API error")
+
+    detectors = observed.get("detectors")
+    if detectors is None:
+        ids = observed.get("DetectorIds")
+        if ids is not None:
+            detectors = [{"id": d, "status": observed.get("status")} for d in (ids or [])]
+    if detectors is None and observed.get("detector_count") is not None:
+        count = int(observed.get("detector_count") or 0)
+        detectors = [] if count == 0 else [{"id": "present", "status": observed.get("status")}]
+    if detectors is None:
+        return None, "GuardDuty detector list missing"
+
+    if detectors == [] or int(observed.get("detector_count") or len(detectors) or 0) == 0:
+        return False, f"No GuardDuty detector exists in the account/Region ({region})"
+
+    enabled = []
+    for d in detectors:
+        if not isinstance(d, dict):
+            continue
+        status = str(d.get("status") or d.get("Status") or "").upper()
+        if status == "ENABLED" or d.get("enabled") is True:
+            enabled.append(d)
+    if enabled:
+        did = enabled[0].get("id") or enabled[0].get("DetectorId") or "detector"
+        return True, f"GuardDuty detector {did} is ENABLED in {region}"
+    # Detectors exist but none ENABLED
+    return False, f"GuardDuty detector(s) exist in {region} but none are ENABLED"
+
+
 CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
     # —— IAM password policy (must use get_account_password_policy) ——
     EvidenceSpec(
@@ -268,6 +324,32 @@ CLOUD_EVIDENCE_SPECS: list[EvidenceSpec] = [
         human_label="AWS Config configuration recorder",
         human_expected="An enabled/recording AWS Config configuration recorder",
         custom_eval=_config_recorder_enabled,
+    ),
+    # —— Amazon GuardDuty detector ——
+    EvidenceSpec(
+        control_key="aws_guardduty_detector",
+        title_tokens=("guardduty",),
+        control_ids=("CLOUD-LOG-003",),
+        preferred_sources=(
+            "guardduty.list_detectors",
+            "guardduty.get_detector",
+        ),
+        incompatible_sources=(
+            "cloudtrail.",
+            "configservice.",
+            "config.describe_configuration",
+            "accessanalyzer.",
+            "iam.get_account_password_policy",
+            "iam.get_account_summary",
+            "s3control.",
+        ),
+        aws_service="guardduty",
+        required_fields=("region", "human_observed"),
+        operator="custom",
+        expected_value="enabled GuardDuty detector",
+        human_label="Amazon GuardDuty detector",
+        human_expected="An enabled GuardDuty detector",
+        custom_eval=_guardduty_detector_enabled,
     ),
     # —— CloudTrail (title/service match only — never all CLOUD-LOG* IDs) ——
     EvidenceSpec(

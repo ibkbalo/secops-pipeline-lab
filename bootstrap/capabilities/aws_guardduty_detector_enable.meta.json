@@ -1,0 +1,80 @@
+{
+  "version": "0.1.0-capability",
+  "kind": "BOOTSTRAP_CAPABILITY_PROVISIONING",
+  "label": "BOOTSTRAP / CAPABILITY PROVISIONING",
+  "capability_id": "aws_guardduty_detector_enable",
+  "finding_id_hint": "CLOUD-LOG-003",
+  "service": "guardduty",
+  "inline_policy_name": "SentinelGuardDutyRemediation",
+  "role_name": "SentinelStacksRemediationRole",
+  "terraform_relpath": "bootstrap/capabilities/aws_guardduty_detector_enable.tf",
+  "policy_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "ManageGuarddutyRemediation",
+        "Effect": "Allow",
+        "Action": [
+          "guardduty:CreateDetector",
+          "guardduty:GetDetector",
+          "guardduty:ListDetectors",
+          "guardduty:UpdateDetector",
+          "guardduty:TagResource",
+          "guardduty:ListTagsForResource"
+        ],
+        "Resource": "*",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": "us-east-1"
+          }
+        }
+      },
+      {
+        "Sid": "CreateServiceLinkedRole",
+        "Effect": "Allow",
+        "Action": "iam:CreateServiceLinkedRole",
+        "Resource": "*",
+        "Condition": {
+          "StringEquals": {
+            "iam:AWSServiceName": "guardduty.amazonaws.com"
+          }
+        }
+      },
+      {
+        "Sid": "GetRole",
+        "Effect": "Allow",
+        "Action": "iam:GetRole",
+        "Resource": "arn:aws:iam::952654481542:role/aws-service-role/guardduty.amazonaws.com/AWSServiceRoleForAmazonGuardDuty"
+      }
+    ]
+  },
+  "missing_permissions": [
+    "guardduty:CreateDetector",
+    "guardduty:GetDetector",
+    "guardduty:ListDetectors",
+    "guardduty:UpdateDetector",
+    "guardduty:TagResource",
+    "guardduty:ListTagsForResource",
+    "iam:CreateServiceLinkedRole",
+    "iam:GetRole"
+  ],
+  "authorization_status": "READY_FOR_ADMIN_AUTHORIZATION",
+  "executable_by_remediation_role": false,
+  "executable_by_scanner": false,
+  "requires_admin_bootstrap": true,
+  "bootstrap_path": {
+    "kind": "bootstrap_provisioner",
+    "status": "NO_PROGRAMMATIC_BOOTSTRAP_EXECUTOR",
+    "lab_human_operator": "sentinel-operator",
+    "note": "No configured machine identity holds iam:PutRolePolicy on the remediation role. Capability provisioning requires an explicitly authorized administrator-controlled bootstrap path (customer install/update). sentinel-operator is a human console operator and must not be silently treated as an agent bootstrap executor.",
+    "forbidden_executors": [
+      "arn:aws:iam::952654481542:role/SentinelStacksRemediationRole",
+      "arn:aws:iam::952654481542:role/SentinelStacksDemoRead"
+    ],
+    "self_escalation_forbidden": true
+  },
+  "self_escalation_forbidden": true,
+  "aws_modified": false,
+  "auto_applied": false,
+  "ordinary_remediation_note": "After capability READY, ordinary remediation is the control artifact only (e.g. terraform/CLOUD-LOG-003.tf) \u2014 not this bootstrap policy."
+}

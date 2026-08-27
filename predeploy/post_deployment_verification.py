@@ -36,15 +36,21 @@ def verification_plan_for_finding(finding_id: str, title: str | None = None) -> 
             "pass_criteria": "AWS Config configuration recorder present and recording",
             "version": VERSION,
         }
-    if "guardduty" in title_l or fid in {"CLOUD-LOG-004", "AWS-016"}:
+    if "guardduty" in title_l or fid in {"CLOUD-LOG-003", "CLOUD-DFT-001", "CLOUD-LOG-004", "AWS-016"}:
         return {
             "finding_id": finding_id,
             "method": "aws_api",
             "steps": [
-                "guardduty.list_detectors / get_detector — detector exists and Status=ENABLED",
-                "Re-run scan_cloud_pack live for GuardDuty clearance",
+                "Call guardduty.list_detectors in the finding Region (account-scoped)",
+                "Confirm at least one DetectorId is returned",
+                "Call guardduty.get_detector for each ID and confirm Status=ENABLED",
+                "Confirm the caller account and Region match the approved remediation scope",
+                "Re-run scan_cloud_pack live and ensure CLOUD-LOG-003 / GuardDuty control no longer fails",
             ],
-            "pass_criteria": "GuardDuty detector enabled",
+            "pass_criteria": (
+                "GuardDuty detector exists, Status=ENABLED, correct account and Region; "
+                "fresh Sentinel rescan clears the GuardDuty control"
+            ),
             "version": VERSION,
         }
     if fid.startswith("CLOUD-STO") or "public access block" in title_l:

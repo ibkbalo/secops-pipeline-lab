@@ -421,15 +421,72 @@ def _collect_logging(session: Any, region: str) -> dict[str, Any]:
 
     gd = _client(session, "guardduty", region)
     detectors = []
-    for did in _safe(lambda: gd.list_detectors().get("DetectorIds") or [], []):
-        det = _safe(lambda d=did: gd.get_detector(DetectorId=d), {})
-        detectors.append(
-            {
-                "id": did,
-                "status": det.get("Status") or "DISABLED",
-                "enabled": str(det.get("Status") or "").upper() == "ENABLED",
-            }
+    guardduty_meta: dict[str, Any] = {"region": region}
+    try:
+        detector_ids = gd.list_detectors().get("DetectorIds") or []
+        guardduty_meta["aws_response_classification"] = (
+            "EmptyDetectorList" if not detector_ids else "DetectorList"
         )
+        for did in detector_ids:
+            try:
+                det = gd.get_detector(DetectorId=did) or {}
+                status = str(det.get("Status") or "DISABLED").upper()
+                detectors.append(
+                    {
+                        "id": did,
+                        "status": status,
+                        "enabled": status == "ENABLED",
+                    }
+                )
+            except Exception as e:
+                detectors.append(
+                    {
+                        "id": did,
+                        "status": "UNKNOWN",
+                        "enabled": False,
+                        "error": str(e),
+                    }
+                )
+    except Exception as e:
+        # Preserve semantic control-state exceptions (e.g. SubscriptionRequiredException)
+        # instead of silently treating them as an empty detector list.
+        try:
+            from change_assurance.aws_response_semantics import (
+                interpret_aws_exception,
+                normalize_error_code,
+            )
+
+            code = normalize_error_code(e)
+            semantic = interpret_aws_exception(
+                service="guardduty",
+                error_code=code,
+                exc=e,
+                region=region,
+                api_call="guardduty.list_detectors",
+            )
+            if semantic:
+                guardduty_meta.update(
+                    {
+                        "semantic": True,
+                        "control_state": semantic.get("control_state"),
+                        "aws_response_classification": code,
+                        "human_observed": semantic.get("human_observed"),
+                        "notes": semantic.get("notes"),
+                        "DetectorIds": [],
+                        "detector_count": 0,
+                    }
+                )
+            else:
+                guardduty_meta.update(
+                    {
+                        "error": str(e),
+                        "code": code,
+                        "aws_response_classification": code or type(e).__name__,
+                    }
+                )
+        except Exception:
+            guardduty_meta["error"] = str(e)
+            guardduty_meta["aws_response_classification"] = type(e).__name__
 
     sechub_enabled = False
     try:
@@ -443,6 +500,7 @@ def _collect_logging(session: Any, region: str) -> dict[str, Any]:
         "cloudtrail_trails": trails_out,
         "aws_config": {"recording_enabled": recording, "config_recorders": recorders},
         "guardduty_detectors": detectors,
+        "guardduty": guardduty_meta,
         "security_hub": {"enabled": sechub_enabled},
     }
 

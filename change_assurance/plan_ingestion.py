@@ -341,6 +341,9 @@ def risk_rationale_from_plan(plan: dict[str, Any], *, base_level: str | None = N
             level = "MEDIUM"
         elif "aws_accessanalyzer_analyzer" in types and creates <= 2:
             level = "LOW"
+        elif "aws_guardduty_detector" in types and creates <= 3 and modifies == 0:
+            # Detector alone, or detector + least-privilege remediation-role policy
+            level = "LOW"
 
     if destroys > 0 or replaces > 0:
         rationale = (
@@ -355,8 +358,34 @@ def risk_rationale_from_plan(plan: dict[str, Any], *, base_level: str | None = N
             parts.append("S3")
         if any(t.startswith("aws_config_") for t in types):
             parts.append("AWS Config")
+        if "aws_guardduty_detector" in types:
+            parts.append("GuardDuty")
         created_kinds = ", ".join(parts) if parts else "cloud"
-        if any(t.startswith("aws_config_") for t in types):
+        if "aws_guardduty_detector" in types and creates <= 3:
+            iam_stage = any("aws_iam_role_policy" in t or t == "aws_iam_role_policy" for t in types)
+            if not iam_stage:
+                # also check addresses via resource list
+                iam_stage = any(
+                    "iam_role_policy" in str(r.get("type") or r.get("address") or "")
+                    for r in (plan.get("resources_to_create") or [])
+                )
+            if iam_stage:
+                rationale = (
+                    f"{level} because the reviewed staged package creates a least-privilege "
+                    f"GuardDuty remediation-role policy plus an additive GuardDuty detector "
+                    f"(create={creates}, change=0, destroy=0). Stage A is IAM permission enablement "
+                    "for SentinelStacksRemediationRole only; Stage B enables the detector. "
+                    "No workload/network changes; primary business consideration is GuardDuty service cost "
+                    "and Region coverage."
+                )
+            else:
+                rationale = (
+                    f"{level} because the reviewed plan creates an additive Amazon GuardDuty detector "
+                    f"(create={creates}, change=0, destroy=0), does not modify workloads/IAM/networking, "
+                    "and is not expected to cause downtime — primary business consideration is GuardDuty service cost "
+                    "and Region coverage scope."
+                )
+        elif any(t.startswith("aws_config_") for t in types):
             rationale = (
                 f"{level} because the reviewed Terraform plan creates {created_kinds} resources and enables continuous "
                 "configuration recording, but modifies zero existing resources, destroys zero existing resources, "
@@ -545,6 +574,120 @@ def ingest_reviewed_plan_for_finding(
     normalized["manager_affect"] = manager_affect_from_plan(normalized)
     normalized["risk"] = risk_rationale_from_plan(normalized)
     return normalized
+
+
+def bind_reviewed_terraform_plan(
+    job: dict[str, Any],
+    finding_id: str,
+    *,
+    plan_path: str | Path,
+    source_artifact_path: str | Path | None = None,
+    source_artifact_sha256: str | None = None,
+    account_id: str | None = None,
+    region: str | None = None,
+    execution_role: str | None = None,
+    execution_profile: str | None = None,
+    working_directory: str | Path | None = None,
+    plan_kind: str = "reviewed",
+) -> dict[str, Any]:
+    """
+    Bind a REAL saved Terraform plan for pre-approval Change Assurance.
+    Does NOT apply. Does NOT approve. Manager decision remains pending.
+    """
+    from change_assurance.models import now
+
+    plan_path = Path(plan_path)
+    if not plan_path.is_file():
+        raise FileNotFoundError(f"Terraform plan missing: {plan_path}")
+    disk_sha = sha256_file(plan_path).lower()
+    src_path = Path(source_artifact_path) if source_artifact_path else None
+    src_sha = (source_artifact_sha256 or "").lower() or None
+    if src_path and src_path.is_file() and not src_sha:
+        src_sha = sha256_file(src_path).lower()
+
+    acct = account_id or job.get("aws_account_id")
+    reg = region or job.get("region")
+    role = execution_role or job.get("execution_role") or job.get("intended_execution_role")
+    profile = execution_profile or job.get("execution_profile") or job.get("aws_profile")
+    identity = None
+    if role and acct:
+        identity = f"arn:aws:iam::{acct}:role/{role}"
+
+    ref = {
+        "finding_id": finding_id,
+        "plan_path": str(plan_path),
+        "saved_plan_path": str(plan_path),
+        "plan_sha256": disk_sha,
+        "saved_plan_sha256": disk_sha,
+        "working_directory": str(working_directory or plan_path.parent),
+        "source_artifact_path": str(src_path) if src_path else None,
+        "source_artifact_sha256": src_sha,
+        "account_id": acct,
+        "region": reg,
+        "execution_role": role,
+        "execution_profile": profile,
+        "execution_identity": identity,
+        "planning_identity": identity,
+        "plan_kind": plan_kind,
+        "status": "CURRENT",
+        "plan_review_status": "REVIEWED_FOR_ASSURANCE",
+        "executable": True,
+        "superseded": False,
+        "bound_at": now(),
+        "execution_performed": False,
+        "apply_forbidden": True,
+    }
+    plans = dict(job.get("reviewed_terraform_plans") or {})
+    previous = dict(plans.get(finding_id) or {})
+    if previous:
+        history = list(job.get("reviewed_plan_history") or [])
+        archived = dict(previous)
+        archived["status"] = previous.get("status") or "SUPERSEDED"
+        archived["archived_at"] = now()
+        archived["executable"] = False
+        history.append(archived)
+        job["reviewed_plan_history"] = history
+    plans[finding_id] = ref
+    job["reviewed_terraform_plans"] = plans
+
+    reviewed = ingest_reviewed_plan_for_finding(
+        job,
+        finding_id,
+        source_artifact_path=src_path,
+        source_artifact_sha256=src_sha,
+        account_id=acct,
+        region=reg,
+    )
+    if not reviewed:
+        raise RuntimeError("Failed to ingest reviewed Terraform plan")
+    ref["summary"] = reviewed.get("summary")
+    ref["plan_content_hash"] = reviewed.get("plan_content_hash")
+    ref["resources_to_create"] = reviewed.get("resources_to_create")
+    ref["resources_modified"] = reviewed.get("resources_modified")
+    ref["resources_destroyed"] = reviewed.get("resources_destroyed")
+    plans[finding_id] = ref
+    job["reviewed_terraform_plans"] = plans
+    # Never auto-approve
+    job.setdefault("finding_decisions", {})
+    if str(finding_id) not in (job.get("finding_decisions") or {}):
+        job["finding_decisions"][str(finding_id)] = "pending"
+    job["manager_decision"] = job.get("manager_decision")  # leave unchanged / pending
+    job["execution_authorized"] = False
+    return {
+        "status": "BOUND",
+        "finding_id": finding_id,
+        "plan_path": str(plan_path),
+        "saved_plan_sha256": disk_sha,
+        "source_artifact_sha256": src_sha,
+        "account_id": acct,
+        "region": reg,
+        "execution_role": role,
+        "execution_identity": identity,
+        "reviewed_plan": reviewed,
+        "manager_decision": "PENDING",
+        "execution_performed": False,
+        "apply_forbidden": True,
+    }
 
 
 def validate_plan_artifact_binding(

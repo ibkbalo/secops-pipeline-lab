@@ -582,6 +582,10 @@ CONTROL_EXPLANATIONS: dict[str, dict[str, Any]] = {
 }
 
 
+# Stable finding ID used by scan_cloud_pack maps to the GuardDuty explanation family.
+CONTROL_EXPLANATIONS["CLOUD-LOG-003"] = CONTROL_EXPLANATIONS["CLOUD-DFT-001"]
+
+
 def lookup_explanation(finding_id: str | None, title: str | None = None) -> dict[str, Any] | None:
     fid = str(finding_id or "").upper().strip()
     if fid in CONTROL_EXPLANATIONS:

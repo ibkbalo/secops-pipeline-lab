@@ -85,6 +85,18 @@ def discover_for_findings(
             finding_id=ids[0] if ids else "CLOUD-LOG-002",
             finding=primary,
         )
+    # Amazon GuardDuty detector — direct regional evidence (not CloudTrail)
+    if (
+        "guardduty" in title_primary
+        or "guardduty" in titles
+        or any(x.upper() == "CLOUD-LOG-003" for x in ids)
+    ):
+        return discover_aws_guardduty(
+            profile=profile,
+            region=region,
+            finding_id=ids[0] if ids else "CLOUD-LOG-003",
+            finding=primary,
+        )
     # CloudTrail-specific titles only (never all CLOUD-LOG* — Config/GuardDuty share that prefix)
     if "cloudtrail" in titles or "cloud trail" in title_primary:
         return discover_cloudtrail(
@@ -662,6 +674,292 @@ def discover_aws_config(
         return {
             "version": VERSION,
             "kind": "aws_config",
+            "status": "FAIL",
+            "error": str(e),
+            "profile": profile,
+            "region": region,
+            "summary": {**summary, "finding_status": "ERROR"},
+            "evidence": evidence,
+            "evidence_assessment": {
+                "finding_status": "ERROR",
+                "evidence_quality": "ERROR",
+                "reason": str(e),
+            },
+        }
+
+
+def discover_aws_guardduty(
+    *,
+    profile: str,
+    region: str,
+    finding_id: str,
+    finding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Direct evidence for Amazon GuardDuty detector controls (CLOUD-LOG-003).
+    Primary API: guardduty.list_detectors
+    When detectors exist: guardduty.get_detector for Status.
+    SubscriptionRequiredException → DIRECT FAIL (service not subscribed/enabled).
+    AccessDenied / transport errors → ERROR / UNVERIFIED (do not guess).
+    """
+    from change_assurance.aws_response_semantics import (
+        interpret_aws_exception,
+        is_permission_or_transport_error,
+        normalize_error_code,
+    )
+    from change_assurance.domains.cloud.evidence_registry import cloud_specs
+    from change_assurance.evidence_quality import assess_finding_evidence
+
+    evidence: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {
+        "detector_count": 0,
+        "enabled": False,
+        "region": region,
+        "finding_status": "UNKNOWN",
+        "aws_response_classification": None,
+    }
+    try:
+        import boto3
+        from botocore.exceptions import ClientError, BotoCoreError
+
+        session = boto3.Session(profile_name=profile, region_name=region)
+        gd = session.client("guardduty", region_name=region)
+        account = None
+        try:
+            account = session.client("sts").get_caller_identity().get("Account")
+        except Exception:
+            account = None
+
+        try:
+            detector_ids = gd.list_detectors().get("DetectorIds") or []
+        except (ClientError, BotoCoreError, Exception) as e:
+            code = normalize_error_code(e)
+            semantic = interpret_aws_exception(
+                service="guardduty",
+                error_code=code,
+                exc=e,
+                region=region,
+                api_call="guardduty.list_detectors",
+            )
+            if semantic:
+                observed = {
+                    "DetectorIds": [],
+                    "detector_count": 0,
+                    "detectors": [],
+                    "region": region,
+                    "semantic": True,
+                    "control_state": semantic.get("control_state"),
+                    "code": code,
+                    "aws_response_classification": code,
+                    "error_code": code,
+                    "human_observed": semantic.get("human_observed"),
+                    "notes": semantic.get("notes"),
+                    "evidence_quality": "DIRECT",
+                }
+                evidence.append(
+                    _evidence(
+                        finding_id=finding_id,
+                        api_call="guardduty.list_detectors",
+                        resource_id=account or "account",
+                        resource_type="aws_guardduty_detector",
+                        observed_value=observed,
+                        expected_value={"status": "ENABLED", "detector_count": ">= 1"},
+                        account_id=account,
+                        region=region,
+                        quality="DIRECT",
+                        purpose="proof",
+                    )
+                )
+                summary.update(
+                    {
+                        "detector_count": 0,
+                        "enabled": False,
+                        "aws_response_classification": code,
+                        "control_state": semantic.get("control_state"),
+                    }
+                )
+            else:
+                quality = "ERROR"
+                human = f"GuardDuty API error in {region}: {code or e}"
+                evidence.append(
+                    _evidence(
+                        finding_id=finding_id,
+                        api_call="guardduty.list_detectors",
+                        resource_id=account or "account",
+                        resource_type="aws_guardduty_detector",
+                        observed_value={
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                            "code": code,
+                            "aws_response_classification": code or type(e).__name__,
+                            "region": region,
+                            "human_observed": human,
+                            "permission_or_transport": is_permission_or_transport_error(code, e),
+                        },
+                        expected_value={"status": "ENABLED"},
+                        account_id=account,
+                        region=region,
+                        quality=quality,
+                        purpose="error",
+                        confidence="low",
+                    )
+                )
+                summary["aws_response_classification"] = code or type(e).__name__
+            assessment = assess_finding_evidence(
+                finding_id=finding_id,
+                title=str((finding or {}).get("title") or finding_id),
+                evidence=evidence,
+                specs=cloud_specs(),
+            )
+            summary["finding_status"] = assessment.get("finding_status") or (
+                "CONFIRMED" if semantic else "UNVERIFIED"
+            )
+            return {
+                "version": VERSION,
+                "kind": "aws_guardduty",
+                "status": "OK" if semantic else "FAIL",
+                "profile": profile,
+                "region": region,
+                "account_id": account,
+                "summary": summary,
+                "evidence": assessment.get("labeled_evidence") or evidence,
+                "evidence_assessment": assessment,
+                "scope": "regional",
+                "potentially_affected_workloads": "None detected (threat detection coverage control)",
+                "flags_hint": {"guardduty_enable": True},
+            }
+
+        detectors: list[dict[str, Any]] = []
+        get_errors: list[str] = []
+        for did in detector_ids:
+            try:
+                det = gd.get_detector(DetectorId=did) or {}
+                status = str(det.get("Status") or "UNKNOWN").upper()
+                detectors.append(
+                    {
+                        "id": did,
+                        "status": status,
+                        "enabled": status == "ENABLED",
+                    }
+                )
+            except (ClientError, BotoCoreError, Exception) as e:
+                get_errors.append(f"{did}:{normalize_error_code(e) or e}")
+                detectors.append({"id": did, "status": "UNKNOWN", "enabled": False})
+
+        enabled_rows = [d for d in detectors if d.get("enabled")]
+        if not detector_ids:
+            human = f"No GuardDuty detector exists in the account/Region ({region})"
+            classification = "EmptyDetectorList"
+        elif enabled_rows:
+            human = (
+                f"GuardDuty detector {enabled_rows[0].get('id')} is ENABLED in {region}"
+            )
+            classification = "DetectorEnabled"
+        else:
+            human = f"GuardDuty detector(s) exist in {region} but none are ENABLED"
+            classification = "DetectorDisabled"
+            if get_errors:
+                classification = "DetectorStatusUnavailable"
+
+        observed: dict[str, Any] = {
+            "DetectorIds": list(detector_ids),
+            "detector_count": len(detector_ids),
+            "detectors": detectors,
+            "region": region,
+            "human_observed": human,
+            "aws_response_classification": classification,
+            "enabled": bool(enabled_rows),
+        }
+        if get_errors and detector_ids and not enabled_rows:
+            # Detectors listed but status unavailable — do not invent FAIL/PASS from partial
+            observed["error"] = "; ".join(get_errors)
+            observed["human_observed"] = (
+                f"GuardDuty detector ID(s) present in {region} but status lookup failed"
+            )
+            evidence.append(
+                _evidence(
+                    finding_id=finding_id,
+                    api_call="guardduty.get_detector",
+                    resource_id=account or "account",
+                    resource_type="aws_guardduty_detector",
+                    observed_value=observed,
+                    expected_value={"status": "ENABLED"},
+                    account_id=account,
+                    region=region,
+                    quality="ERROR",
+                    purpose="error",
+                    confidence="low",
+                )
+            )
+        else:
+            evidence.append(
+                _evidence(
+                    finding_id=finding_id,
+                    api_call="guardduty.list_detectors",
+                    resource_id=account or "account",
+                    resource_type="aws_guardduty_detector",
+                    observed_value=observed,
+                    expected_value={"status": "ENABLED", "detector_count": ">= 1"},
+                    account_id=account,
+                    region=region,
+                    quality="DIRECT",
+                    purpose="proof",
+                )
+            )
+            if detectors:
+                evidence.append(
+                    _evidence(
+                        finding_id=finding_id,
+                        api_call="guardduty.get_detector",
+                        resource_id=(enabled_rows[0].get("id") if enabled_rows else detectors[0].get("id")),
+                        resource_type="aws_guardduty_detector",
+                        observed_value={
+                            "detectors": detectors,
+                            "region": region,
+                            "human_observed": human,
+                            "aws_response_classification": classification,
+                        },
+                        expected_value={"status": "ENABLED"},
+                        account_id=account,
+                        region=region,
+                        quality="DIRECT",
+                        purpose="proof",
+                    )
+                )
+
+        summary.update(
+            {
+                "detector_count": len(detector_ids),
+                "enabled": bool(enabled_rows),
+                "aws_response_classification": classification,
+                "region": region,
+            }
+        )
+        assessment = assess_finding_evidence(
+            finding_id=finding_id,
+            title=str((finding or {}).get("title") or finding_id),
+            evidence=evidence,
+            specs=cloud_specs(),
+        )
+        summary["finding_status"] = assessment.get("finding_status") or "UNVERIFIED"
+        return {
+            "version": VERSION,
+            "kind": "aws_guardduty",
+            "status": "OK",
+            "profile": profile,
+            "region": region,
+            "account_id": account,
+            "summary": summary,
+            "evidence": assessment.get("labeled_evidence") or evidence,
+            "evidence_assessment": assessment,
+            "scope": "regional",
+            "potentially_affected_workloads": "None detected (threat detection coverage control)",
+            "flags_hint": {"guardduty_enable": True},
+        }
+    except Exception as e:
+        return {
+            "version": VERSION,
+            "kind": "aws_guardduty",
             "status": "FAIL",
             "error": str(e),
             "profile": profile,

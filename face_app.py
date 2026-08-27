@@ -231,8 +231,8 @@ def _dashboard_context():
         import security_casebook
 
         security_casebook.ensure_completed_cases(ai_brain_agent.DEFAULT_WORKSPACE)
-        completed_cases = security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE)[:8]
-        completed_n = len(security_casebook.list_cases(ai_brain_agent.DEFAULT_WORKSPACE))
+        completed_cases = security_casebook.list_successful_cases(ai_brain_agent.DEFAULT_WORKSPACE)[:8]
+        completed_n = len(security_casebook.list_successful_cases(ai_brain_agent.DEFAULT_WORKSPACE))
     except Exception:
         completed_cases = []
         completed_n = 0
@@ -483,6 +483,29 @@ def _load_job_review(job: dict) -> dict:
                     )
                 except Exception:
                     pass
+            # Unresolved execution capability: force assurance refresh so external
+            # admin bootstrap is detected without manual cache edits.
+            try:
+                from change_assurance.capabilities import capability_needs_reprobe
+                import json as _json
+
+                peek = None
+                try:
+                    peek_path = (
+                        ai_brain_agent.DEFAULT_WORKSPACE
+                        / "assurance"
+                        / "by_finding"
+                        / str(job.get("job_id") or "")
+                        / f"{focus_id}.json"
+                    )
+                    if peek_path.is_file():
+                        peek = _json.loads(peek_path.read_text(encoding="utf-8-sig"))
+                except Exception:
+                    peek = None
+                if capability_needs_reprobe((peek or {}).get("execution_capability") or {}):
+                    refresh = True
+            except Exception:
+                pass
         impact = load_or_analyze(
             ai_brain_agent.DEFAULT_WORKSPACE,
             job,
@@ -768,7 +791,7 @@ def completed_jobs():
         security_casebook.ensure_completed_cases(ws)
     except Exception:
         pass
-    cases = security_casebook.list_cases(ws)
+    cases = security_casebook.list_successful_cases(ws)
     filtered = security_casebook.filter_cases(
         cases,
         agent=request.args.get("agent") or None,

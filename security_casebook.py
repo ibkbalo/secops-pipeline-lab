@@ -76,6 +76,9 @@ STATUS_PARTIAL = "PARTIAL"
 STATUS_FAILED = "FAILED"
 STATUS_ACCEPTED_RISK = "ACCEPTED RISK"
 STATUS_RESOLUTION_UNVERIFIED = "RESOLUTION_UNVERIFIED"
+STATUS_FALSE_CLOSURE = "FALSE_CLOSURE"
+STATUS_EXTERNAL_CHANGE = "EXTERNAL_CHANGE"
+STATUS_UNEXPLAINED_CLEAR = "UNEXPLAINED_CLEAR"
 
 # Field / narrative consistency guards
 CASE_FIELD_TYPE_MISMATCH = "CASE_FIELD_TYPE_MISMATCH"
@@ -109,12 +112,27 @@ IAM_PASSWORD_CONTROLS = (
     "CLOUD-IAM-005",
 )
 
-# Stable titles for per-finding completed remediations.
+# Stable titles for per-finding completed remediations (canonical control names).
 CONTROL_CASE_TITLES = {
     "CLOUD-IAM-013": "IAM Access Analyzer Enablement",
+    "CLOUD-LOG-002": "AWS Config Recorder Enablement",
 }
 
 ACCESS_ANALYZER_CONTROL = "CLOUD-IAM-013"
+
+# Statuses that indicate an attributable execution attempt for a control.
+_EXECUTION_ATTEMPT_STATUSES = frozenset(
+    {
+        "PARTIAL_EXECUTION",
+        "RECOVERY_REQUIRED",
+        "COMPLETED",
+        "SUCCESS",
+        "SUCCEEDED",
+        "APPLIED",
+        "PARTIAL",
+        "FAILED_AFTER_PARTIAL",
+    }
+)
 
 
 def _now() -> str:
@@ -189,15 +207,32 @@ def load_case(workspace: Path | str, case_id: str) -> dict[str, Any] | None:
     return _read_json(path)
 
 
-def list_cases(workspace: Path | str) -> list[dict[str, Any]]:
+def list_cases(
+    workspace: Path | str,
+    *,
+    include_invalid: bool = False,
+    successful_only: bool = False,
+) -> list[dict[str, Any]]:
+    """List cases. Successful Casebook view excludes FALSE_CLOSURE by default."""
     index = load_index(workspace)
     out: list[dict[str, Any]] = []
     for cid in index.get("case_ids") or []:
         case = load_case(workspace, cid)
-        if case:
-            out.append(case)
+        if not case:
+            continue
+        status = str(case.get("status") or "").upper()
+        if not include_invalid and status == STATUS_FALSE_CLOSURE:
+            continue
+        if successful_only and status != STATUS_SUCCESS:
+            continue
+        out.append(case)
     out.sort(key=lambda c: str(c.get("created_at") or ""), reverse=True)
     return out
+
+
+def list_successful_cases(workspace: Path | str) -> list[dict[str, Any]]:
+    """Casebook entries presented as successful remediations."""
+    return list_cases(workspace, include_invalid=False, successful_only=True)
 
 
 def severity_counts(findings: list[dict] | None) -> dict[str, int]:
@@ -301,15 +336,174 @@ def remediation_key(job_id: str, control_ids: list[str]) -> str:
     return f"{job_id}:{controls}"
 
 
-def case_title_for_controls(control_ids: list[str], *, job_title: str | None = None) -> str:
+def case_title_for_controls(
+    control_ids: list[str],
+    *,
+    job_title: str | None = None,
+    findings: list[dict] | None = None,
+) -> str:
+    """Canonical human-readable case title — never '<CONTROL_ID> Remediation'."""
     ids = [str(c) for c in control_ids if c]
     if set(ids) >= set(IAM_PASSWORD_CONTROLS):
         return "AWS IAM Password Policy Hardening"
     if len(ids) == 1 and ids[0] in CONTROL_CASE_TITLES:
         return CONTROL_CASE_TITLES[ids[0]]
     if len(ids) == 1:
-        return f"{ids[0]} Remediation"
+        cid = ids[0]
+        title_from_finding = None
+        for f in findings or []:
+            if isinstance(f, dict) and str(f.get("id") or "") == cid:
+                title_from_finding = str(f.get("title") or f.get("name") or "").strip()
+                break
+        if title_from_finding:
+            # Prefer the control title as-is when it already reads as a capability name.
+            return title_from_finding
+        # Last resort: readable control family, not "<ID> Remediation".
+        return f"Security control {cid}"
     return str(job_title or "Security remediation")
+
+
+def control_authorized_on_job(job: dict[str, Any], control_ids: list[str]) -> bool:
+    """True when each control was manager-approved on the job."""
+    approved = _approved_control_ids(job)
+    wanted = [str(c) for c in control_ids if c]
+    if not wanted:
+        return False
+    if all(c in approved for c in wanted):
+        return True
+    # Whole-job approval without per-finding map only counts when decisions empty
+    # and status is approved — still require explicit per-control decisions when present.
+    fds = job.get("finding_decisions") or {}
+    if fds:
+        return False
+    return str(job.get("manager_decision") or job.get("status") or "").lower() in {
+        "approved",
+        "partially_approved",
+    }
+
+
+def _execution_row_indicates_attempt(row: dict[str, Any] | None) -> bool:
+    if not isinstance(row, dict) or not row:
+        return False
+    if row.get("succeeded_resources"):
+        return True
+    if row.get("failed_resources") and row.get("succeeded_resources") is not None:
+        return True
+    status = str(row.get("status") or row.get("execution_status") or "").upper()
+    if status in _EXECUTION_ATTEMPT_STATUSES:
+        return True
+    if row.get("recovery_plan_bound") or row.get("recovery_plan_sha256"):
+        return True
+    if row.get("apply_attempted") or row.get("execution_attempted"):
+        return True
+    return False
+
+
+def assess_remediation_attribution(
+    workspace: Path | str,
+    job: dict[str, Any],
+    control_ids: list[str],
+    *,
+    documented_completion: bool = False,
+) -> dict[str, Any]:
+    """
+    Decide whether a cleared control may be recorded as Sentinel remediation SUCCESS.
+
+    Finding absence alone is never enough. Requires attributable evidence of:
+    authorization, remediation artifact (or documented manual completion), and an
+    execution attempt (or documented manual completion) for those control IDs.
+    """
+    workspace = Path(workspace)
+    wanted = [str(c) for c in control_ids if c]
+    if not wanted:
+        return {
+            "attributed": False,
+            "reason": "missing_control_identity",
+            "evidence": {},
+        }
+
+    authorized = control_authorized_on_job(job, wanted)
+    has_artifact = _job_has_terraform_for_controls(workspace, job, wanted)
+    # Non-TF jobs may still document manual remediation via kit/other artifacts
+    art = infer_remediation_artifact_type(
+        role=str(job.get("role") or ""),
+        kit_path=str(job.get("kit_path") or ""),
+        artifacts=None,
+        explicit=None,
+    )
+    has_remediation_material = has_artifact or art not in {ARTIFACT_NONE, None, ""}
+
+    fe = job.get("finding_execution") if isinstance(job.get("finding_execution"), dict) else {}
+    attempts = list(job.get("execution_attempts") or [])
+    exec_hits: list[str] = []
+    for cid in wanted:
+        row = fe.get(cid) if isinstance(fe, dict) else None
+        if _execution_row_indicates_attempt(row if isinstance(row, dict) else None):
+            exec_hits.append(cid)
+            continue
+        for att in attempts:
+            if not isinstance(att, dict):
+                continue
+            if str(att.get("finding_id") or "") != cid:
+                continue
+            if _execution_row_indicates_attempt(att) or att.get("succeeded_resources"):
+                exec_hits.append(cid)
+                break
+
+    # Approval sidecar may record a completed human apply for a specific finding.
+    approval = _load_sidecar(workspace, str(job.get("job_id") or ""), "approvals") or {}
+    approval_apply = False
+    if approval:
+        ap_fid = str(approval.get("finding_id") or "")
+        if ap_fid in wanted and (
+            approval.get("apply_completed")
+            or approval.get("execution_recorded")
+            or approval.get("human_apply_completed")
+            or str(approval.get("apply_status") or "").lower() in {"applied", "success", "succeeded"}
+        ):
+            approval_apply = True
+            if ap_fid not in exec_hits:
+                exec_hits.append(ap_fid)
+
+    completions = job.get("remediation_completions") if isinstance(job.get("remediation_completions"), dict) else {}
+    for cid in wanted:
+        row = completions.get(cid) if isinstance(completions, dict) else None
+        if isinstance(row, dict) and (
+            row.get("completed") or row.get("applied") or row.get("manual_completion")
+        ):
+            if cid not in exec_hits:
+                exec_hits.append(cid)
+
+    execution_ok = bool(exec_hits) and set(wanted) <= set(exec_hits)
+    # Documented completion (explicit create_case path) satisfies artifact+execution.
+    if documented_completion:
+        has_remediation_material = True
+        execution_ok = True
+
+    evidence = {
+        "authorized": authorized,
+        "has_remediation_material": has_remediation_material,
+        "has_control_terraform": has_artifact,
+        "execution_controls": exec_hits,
+        "approval_apply_recorded": approval_apply,
+        "documented_completion": documented_completion,
+    }
+
+    if not authorized:
+        return {"attributed": False, "reason": "not_authorized", "evidence": evidence}
+    if not has_remediation_material and not documented_completion:
+        return {"attributed": False, "reason": "no_remediation_artifact", "evidence": evidence}
+    if not execution_ok:
+        return {
+            "attributed": False,
+            "reason": "no_attributable_execution",
+            "evidence": evidence,
+        }
+    return {
+        "attributed": True,
+        "reason": "attributed_remediation_lifecycle",
+        "evidence": evidence,
+    }
 
 
 def _scan_identity(scan: dict[str, Any] | None) -> dict[str, str | None]:
@@ -454,9 +648,21 @@ def assess_control_resolution(
             "status": STATUS_RESOLUTION_UNVERIFIED,
             "reason": f"still_open:{','.join(still_open)}",
             "verified": False,
+            "scan_cleared": False,
         }
 
-    return {"status": STATUS_SUCCESS, "reason": "verified_absent", "verified": True}
+    # Absence on a compatible re-scan is scan clearance only — NOT remediation success.
+    return {
+        "status": STATUS_RESOLUTION_UNVERIFIED,
+        "reason": "absent_on_rescan",
+        "verified": True,
+        "scan_cleared": True,
+        "remediation_attributed": False,
+        "note": (
+            "Control absent on re-scan. This is not sufficient for a SUCCESS remediation "
+            "case without attributable authorization, artifact, and execution evidence."
+        ),
+    }
 
 
 def _approved_control_ids(job: dict[str, Any]) -> set[str]:
@@ -493,6 +699,24 @@ def _job_has_terraform_for_controls(workspace: Path, job: dict[str, Any], contro
         ):
             if approval.get("terraform_plan_hash"):
                 return True
+    # Bound reviewed / recovery plans per control
+    reviewed = job.get("reviewed_terraform_plans") if isinstance(job.get("reviewed_terraform_plans"), dict) else {}
+    for cid in control_ids:
+        ref = reviewed.get(cid) if isinstance(reviewed, dict) else None
+        if isinstance(ref, dict) and (
+            ref.get("plan_path")
+            or ref.get("saved_plan_path")
+            or ref.get("plan_sha256")
+            or ref.get("saved_plan_sha256")
+        ):
+            return True
+    fe = job.get("finding_execution") if isinstance(job.get("finding_execution"), dict) else {}
+    for cid in control_ids:
+        row = fe.get(cid) if isinstance(fe, dict) else None
+        if isinstance(row, dict) and (
+            row.get("recovery_plan_path") or row.get("recovery_plan_sha256") or row.get("approved_plan_sha256")
+        ):
+            return True
     assurance = _load_sidecar(workspace, str(job.get("job_id") or ""), "assurance") or {}
     arts = assurance.get("artifacts") or []
     blob = " ".join(
@@ -502,15 +726,31 @@ def _job_has_terraform_for_controls(workspace: Path, job: dict[str, Any], contro
         ]
     ).lower()
     if ".tf" in blob or "terraform" in blob:
-        return True
+        # Only count as control-scoped when a matching control artifact path is present
+        art_blob = json.dumps(arts, ensure_ascii=True)
+        if any(cid in art_blob for cid in control_ids):
+            return True
     job_id = str(job.get("job_id") or "")
     draft = workspace / "drafts" / job_id / "kit_extract" / "terraform"
     if draft.is_dir():
         for cid in control_ids:
             if (draft / f"{cid}.tf").is_file():
                 return True
-        if any(draft.glob("*.tf")):
+        if any(draft.glob("*.tf")) and not control_ids:
             return True
+    kit = str(job.get("kit_path") or "")
+    if kit:
+        kit_p = Path(kit)
+        for cid in control_ids:
+            # Common kit layouts
+            for candidate in (
+                kit_p / "terraform" / f"{cid}.tf",
+                kit_p.parent / "terraform" / f"{cid}.tf" if kit_p.suffix else None,
+            ):
+                if candidate and candidate.is_file():
+                    return True
+            if kit_p.is_dir() and (kit_p / "terraform" / f"{cid}.tf").is_file():
+                return True
     return False
 
 
@@ -576,6 +816,13 @@ def find_case_for_remediation(
             return case
         # Do not create partial password-policy slices when a password case exists.
         if wanted <= pwd_family and have & pwd_family:
+            return case
+    # Also check invalidated cases so we do not recreate a FALSE_CLOSURE as SUCCESS.
+    for case in list_cases(workspace, include_invalid=True):
+        if str(case.get("status") or "").upper() != STATUS_FALSE_CLOSURE:
+            continue
+        have = set(str(c) for c in (case.get("controls") or []))
+        if have == wanted and case.get("job_id") == job_id:
             return case
     return None
 
@@ -727,25 +974,60 @@ def _before_after_narrative(
     before_findings: list[dict],
     case_control_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    controls = set(case_control_ids or delta.get("cleared_control_ids") or [])
+    controls = [str(c) for c in (case_control_ids or delta.get("cleared_control_ids") or []) if c]
     if ACCESS_ANALYZER_CONTROL in controls:
         aa = _access_analyzer_narrative(delta)
         if aa.get("applicable"):
+            # Keep AA-specific detail, but always separate overall scan vs attributed.
+            aa = dict(aa)
+            aa["overall_scan"] = {
+                "before_total": delta.get("before_total"),
+                "after_total": delta.get("after_total"),
+            }
+            aa["attributed_controls"] = list(controls)
+            aa["attribution_line"] = (
+                f"ATTRIBUTED TO THIS CASE: {len(controls)} verified control cleared - "
+                + ", ".join(controls)
+            )
             return aa
     pwd = _password_policy_narrative(delta, before_findings)
     if pwd.get("applicable"):
+        pwd = dict(pwd)
+        pwd["overall_scan"] = {
+            "before_total": delta.get("before_total"),
+            "after_total": delta.get("after_total"),
+        }
+        pwd["attributed_controls"] = list(controls)
+        pwd["attribution_line"] = (
+            f"ATTRIBUTED TO THIS CASE: {len(controls)} verified control(s) cleared - "
+            + ", ".join(controls)
+        )
         return pwd
+    attributed_n = len(controls) if controls else int(delta.get("cleared_count") or 0)
+    attributed_label = ", ".join(controls) if controls else "scoped controls"
     return {
-        "applicable": bool(delta.get("cleared_count")),
-        "controls_cleared": list(delta.get("cleared_control_ids") or []),
+        "applicable": bool(delta.get("cleared_count") or controls),
+        "controls_cleared": list(controls or delta.get("cleared_control_ids") or []),
+        "overall_scan": {
+            "before_total": delta.get("before_total"),
+            "after_total": delta.get("after_total"),
+        },
+        "attributed_controls": list(controls),
+        "attribution_line": (
+            f"ATTRIBUTED TO THIS CASE: {attributed_n} verified control"
+            f"{'s' if attributed_n != 1 else ''} cleared - {attributed_label}"
+        ),
         "before_lines": [
-            f"{delta['before_total']} findings",
+            f"OVERALL ACCOUNT SCAN: {delta['before_total']} findings",
             f"{delta['before_severity'].get('high', 0)} High",
         ],
         "after_lines": [
-            f"{delta['after_total']} findings",
+            f"OVERALL ACCOUNT SCAN: {delta['after_total']} findings",
             f"{delta['after_severity'].get('high', 0)} High",
-            f"{delta.get('cleared_count') or 0} control(s) cleared in this case",
+            (
+                f"ATTRIBUTED TO THIS CASE: {attributed_n} verified control"
+                f"{'s' if attributed_n != 1 else ''} cleared - {attributed_label}"
+            ),
         ],
     }
 
@@ -1045,32 +1327,46 @@ def _interview_star(case: dict[str, Any]) -> dict[str, str]:
     except ValueError:
         risk = "UNKNOWN"
     result = (
-        f"Post-remediation re-scan proved {len(cleared)} finding(s) cleared"
-        + (f" ({', '.join(ids)})." if ids else ".")
-        + f" Findings went from {before_n} to {after_n}. Status: {case.get('status')}."
+        (
+            f"{', '.join(ids)} was verified as remediated. "
+            if len(ids) == 1
+            else f"{', '.join(ids)} were verified as remediated. "
+            if ids
+            else "Scoped controls were verified as remediated. "
+        )
+        + f"The overall account scan changed from {before_n} to {after_n} findings; "
+        + (
+            f"only {ids[0]} is attributed to this remediation case."
+            if len(ids) == 1
+            else (
+                f"only {', '.join(ids)} "
+                f"{'are' if len(ids) != 1 else 'is'} attributed to this remediation case."
+                if ids
+                else "only the scoped controls are attributed to this remediation case."
+            )
+        )
+        + f" Status: {case.get('status')}."
     )
     lessons = case.get("narrative", {}).get("training_summary") or ""
     if artifact == ARTIFACT_TERRAFORM and method == EXEC_AWS_CONSOLE:
         paragraph = (
-            f"I identified posture gaps in an AWS security lab ({before_n} findings). "
+            f"I identified posture gaps in an AWS security lab ({before_n} findings overall). "
             "I reviewed and validated a Terraform-based IAM hardening remediation, "
             "approved the account-wide change through the human-in-the-loop workflow, "
             "implemented the equivalent configuration in AWS IAM, and verified the result "
-            f"with a live re-scan. Result: {len(cleared)} control(s) cleared ({before_n} → {after_n})."
+            f"with a live re-scan. {result}"
         )
     elif artifact == ARTIFACT_TERRAFORM and method == EXEC_TERRAFORM:
         paragraph = (
-            f"I identified posture gaps ({before_n} findings), reviewed a Terraform remediation, "
+            f"I identified posture gaps ({before_n} findings overall), reviewed a Terraform remediation, "
             "obtained manager approval, applied it with a human-triggered terraform apply "
-            f"(not platform auto-apply), and re-scanned. Result: {len(cleared)} control(s) cleared "
-            f"({before_n} → {after_n})."
+            f"(not platform auto-apply), and re-scanned. {result}"
         )
     else:
         paragraph = (
-            f"I identified posture gaps in an AWS security lab ({before_n} findings). "
+            f"I identified posture gaps in an AWS security lab ({before_n} findings overall). "
             f"I validated controls with scan evidence, reviewed remediation and blast radius, "
-            f"obtained manager approval, applied the approved change, and re-scanned. "
-            f"Result: {len(cleared)} control(s) cleared ({before_n} → {after_n})."
+            f"obtained manager approval, applied the approved change, and re-scanned. {result}"
         )
     return {
         "situation": situation,
@@ -1532,6 +1828,7 @@ def build_case_document(
     case_title = title or case_title_for_controls(
         case_control_ids,
         job_title=str(job.get("title") or ""),
+        findings=before_findings,
     )
 
     default_changed = (
@@ -2320,8 +2617,14 @@ def maybe_create_case_on_clear(
             before_scan=before_scan,
             after_scan=after_scan,
         )
+        # Scan absence only — not remediation success by itself.
         if not assessment.get("verified"):
-            # Do not create a successful case for unverified disappearance.
+            continue
+
+        attribution = assess_remediation_attribution(workspace, before_job, group)
+        if not attribution.get("attributed"):
+            # Finding disappeared without attributable remediation lifecycle.
+            # Do NOT create a SUCCESS remediation case.
             continue
 
         existing = find_case_for_remediation(
@@ -2329,12 +2632,20 @@ def maybe_create_case_on_clear(
             job_id=str(before_job.get("job_id")),
             control_ids=group,
         )
+        if existing and str(existing.get("status") or "").upper() == STATUS_FALSE_CLOSURE:
+            # Do not resurrect an invalidated false closure as SUCCESS.
+            created_or_existing = existing
+            continue
         if existing and not _verified_case_needs_repair(existing, group):
             created_or_existing = existing
             continue
 
         exec_meta = infer_human_terraform_execution(workspace, before_job, group)
-        title = case_title_for_controls(group, job_title=str(before_job.get("title") or ""))
+        title = case_title_for_controls(
+            group,
+            job_title=str(before_job.get("title") or ""),
+            findings=before_findings,
+        )
         changes = None
         remediation_desc = None
         if ACCESS_ANALYZER_CONTROL in group:
@@ -2376,6 +2687,7 @@ def maybe_create_case_on_clear(
                 force=bool(existing and _verified_case_needs_repair(existing, group)),
                 extra={
                     "resolution": assessment,
+                    "attribution": attribution,
                     "human_triggered": exec_meta.get("human_triggered", True),
                     "platform_execution": False,
                 },
@@ -2439,7 +2751,7 @@ def scan_casebook_consistency(workspace: Path | str) -> list[dict[str, Any]]:
     """Lightweight consistency scan of existing cases (does not mutate)."""
     workspace = Path(workspace)
     findings: list[dict[str, Any]] = []
-    for case in list_cases(workspace):
+    for case in list_cases(workspace, include_invalid=True):
         issues = validate_case_semantics(case)
         ca = case.get("change_assurance_summary") or {}
         if ca.get("deployment_ready") is False and ca.get("deployment_ready_scope") not in {"finding", "job"}:
@@ -2494,10 +2806,201 @@ def repair_access_analyzer_case(workspace: Path | str) -> dict[str, Any] | None:
     )
 
 
+def invalidate_false_closure_case(
+    workspace: Path | str,
+    case_id: str,
+    *,
+    reason: str,
+    detail: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    Mark a falsely closed SUCCESS case as FALSE_CLOSURE without inventing execution history.
+    Preserves the prior claim under audit_invalidation for integrity.
+    """
+    workspace = Path(workspace)
+    case = load_case(workspace, case_id)
+    if not case:
+        return None
+    if str(case.get("status") or "").upper() == STATUS_FALSE_CLOSURE:
+        return case
+
+    prior_claim = {
+        "status": case.get("status"),
+        "verification_result": case.get("verification_result"),
+        "title": case.get("title"),
+        "execution_method": case.get("execution_method"),
+        "execution": deepcopy(case.get("execution") or {}),
+        "findings_remediated": case.get("findings_remediated"),
+        "portfolio_summary": case.get("portfolio_summary"),
+        "interview": deepcopy(case.get("interview") or {}),
+    }
+    case["status"] = STATUS_FALSE_CLOSURE
+    case["verified"] = False
+    case["verification_result"] = "INVALIDATED"
+    case["false_closure"] = True
+    case["audit_invalidation"] = {
+        "invalidated_at": _now(),
+        "reason": reason,
+        "detail": detail
+        or (
+            "Case claimed successful remediation without an attributable execution lifecycle "
+            "for the control. Finding absence on a later scan is insufficient."
+        ),
+        "prior_claim": prior_claim,
+        "rule": (
+            "SUCCESS remediation cases require control identity, remediation artifact or "
+            "documented manual remediation, manager authorization, attributable execution "
+            "attempt, and post-change verification causally linked to that execution."
+        ),
+    }
+    ex = dict(case.get("execution") or {})
+    ex["attribution_valid"] = False
+    ex["method"] = (
+        "INVALIDATED: no attributable remediation execution for this control. "
+        "Prior SUCCESS claim retained only under audit_invalidation.prior_claim."
+    )
+    case["execution"] = ex
+    case["immutable"] = True
+    case["amended_at"] = _now()
+    case["amendment_note"] = f"FALSE_CLOSURE invalidation: {reason}"
+    case["portfolio_summary"] = (
+        f"{case.get('case_id')} — FALSE CLOSURE (audit integrity)\n"
+        f"Classification: {case.get('classification') or CLASSIFICATION_LAB}\n\n"
+        f"This case was invalidated: {case['audit_invalidation']['detail']}\n"
+        "It is retained for audit and must not be presented as a successful remediation."
+    )
+    interview = dict(case.get("interview") or {})
+    interview["result"] = (
+        f"FALSE CLOSURE: {case['audit_invalidation']['detail']} "
+        "Not a successful Sentinel remediation case."
+    )
+    interview["paragraph"] = case["portfolio_summary"]
+    case["interview"] = interview
+
+    directory = case_dir(workspace, case_id)
+    _write_json(directory / "case.json", case)
+    try:
+        write_case_exports(case, directory)
+    except Exception:
+        pass
+    return case
+
+
+def repair_case_attribution_display(
+    workspace: Path | str,
+    case_id: str,
+    *,
+    title: str | None = None,
+) -> dict[str, Any] | None:
+    """Repair title / before-after / interview attribution wording for a legitimate SUCCESS case."""
+    workspace = Path(workspace)
+    case = load_case(workspace, case_id)
+    if not case or str(case.get("status") or "").upper() != STATUS_SUCCESS:
+        return case
+    controls = [str(c) for c in (case.get("controls") or []) if c]
+    before_findings = (case.get("before") or {}).get("findings") or []
+    delta = dict(case.get("scan_delta") or {})
+    new_title = title or case_title_for_controls(
+        controls,
+        job_title=str(case.get("title") or ""),
+        findings=before_findings if isinstance(before_findings, list) else None,
+    )
+    case["title"] = new_title
+    case["before_after_summary"] = _before_after_narrative(
+        delta,
+        before_findings if isinstance(before_findings, list) else [],
+        controls,
+    )
+    case["interview"] = _interview_star(case)
+    case["portfolio_summary"] = _portfolio_summary(case)
+    case["amended_at"] = _now()
+    case["amendment_note"] = "Display attribution repair (title / scan vs attributed wording)"
+    directory = case_dir(workspace, case_id)
+    _write_json(directory / "case.json", case)
+    try:
+        write_case_exports(case, directory)
+    except Exception:
+        pass
+    return case
+
+
+def reconcile_casebook_audit_integrity(workspace: Path | str) -> dict[str, Any]:
+    """
+    Audit existing cases: invalidate SUCCESS rows that lack attributable lifecycle;
+    repair display for legitimate attributed cases. Never invents execution history.
+    """
+    workspace = Path(workspace)
+    invalidated: list[str] = []
+    repaired: list[str] = []
+    preserved: list[str] = []
+
+    index = load_index(workspace)
+    for cid in list(index.get("case_ids") or []):
+        case = load_case(workspace, cid)
+        if not case:
+            continue
+        status = str(case.get("status") or "").upper()
+        controls = [str(c) for c in (case.get("controls") or []) if c]
+
+        # Historical password / Access Analyzer SUCCESS cases stay SUCCESS.
+        if cid == "CASE-2026-0001" or set(controls) >= set(IAM_PASSWORD_CONTROLS):
+            preserved.append(cid)
+            continue
+        if cid == "CASE-2026-0002" or controls == [ACCESS_ANALYZER_CONTROL]:
+            preserved.append(cid)
+            continue
+        if status == STATUS_FALSE_CLOSURE:
+            preserved.append(cid)
+            continue
+        if status != STATUS_SUCCESS:
+            preserved.append(cid)
+            continue
+
+        job_id = str(case.get("job_id") or "")
+        job_path = workspace / "jobs" / f"{job_id}.json"
+        job = _read_json(job_path) if job_path.is_file() else {}
+        attr = assess_remediation_attribution(workspace, job or {}, controls)
+        if not attr.get("attributed"):
+            extra = case.get("extra") if isinstance(case.get("extra"), dict) else {}
+            if isinstance(extra.get("attribution"), dict) and extra["attribution"].get("attributed"):
+                attr = extra["attribution"]
+            elif controls and _execution_row_indicates_attempt(
+                ((job or {}).get("finding_execution") or {}).get(controls[0])
+            ):
+                attr = {"attributed": True, "reason": "job_finding_execution"}
+
+        if not attr.get("attributed"):
+            invalidate_false_closure_case(
+                workspace,
+                cid,
+                reason="NO_ATTRIBUTABLE_REMEDIATION_LIFECYCLE",
+                detail=(
+                    f"Controls {controls} were recorded as SUCCESS remediation without "
+                    "attributable authorization+artifact+execution evidence on the source job. "
+                    "Finding absence alone is insufficient."
+                ),
+            )
+            invalidated.append(cid)
+            continue
+
+        repair_case_attribution_display(workspace, cid)
+        repaired.append(cid)
+
+    return {
+        "invalidated": invalidated,
+        "repaired": repaired,
+        "preserved": preserved,
+    }
+
+
 def ensure_completed_cases(workspace: Path | str) -> list[dict[str, Any]]:
     """Dashboard/Completed Jobs seed: password-policy case + verified per-finding closures."""
     workspace = Path(workspace)
     out: list[dict[str, Any]] = []
+    try:
+        reconcile_casebook_audit_integrity(workspace)
+    except Exception:
+        pass
     try:
         pwd = ensure_iam_password_policy_case(workspace)
         if pwd:

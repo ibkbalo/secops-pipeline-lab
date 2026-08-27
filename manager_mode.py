@@ -781,10 +781,43 @@ def _why_recommend(
         )
 
     if questions or (ca or {}).get("manager_context_required"):
-        q = str(questions[0]).replace("MANAGER CONTEXT REQUIRED:", "").strip() if questions else (
-            "required business context is missing"
-        )
-        return f"Human context is required because the system cannot decide alone: {q}"
+        blocking = [
+            q
+            for q in (questions or [])
+            if "MANAGER CONTEXT REQUIRED" in str(q).upper()
+            or any(
+                tok in str(q).lower()
+                for tok in (
+                    "intentionally public",
+                    "interrupt legitimate traffic",
+                    "break-glass",
+                    "evidence is insufficient",
+                )
+            )
+        ]
+        considerations = [
+            q
+            for q in (questions or [])
+            if q not in blocking and "MANAGER CONSIDERATION" in str(q).upper()
+        ]
+        if blocking or (ca or {}).get("manager_context_required"):
+            q = (
+                str(blocking[0]).replace("MANAGER CONTEXT REQUIRED:", "").strip()
+                if blocking
+                else "required business context is missing"
+            )
+            return f"Human context is required because the system cannot decide alone: {q}"
+        if considerations and rec == "RECOMMEND_APPROVE":
+            return (
+                "Sentinel recommends APPROVE based on confirmed direct evidence and a non-destructive "
+                "reviewed plan. Manager authorization is still required. Consider: "
+                + str(considerations[0]).replace("MANAGER CONSIDERATION:", "").strip()
+            )
+        if considerations:
+            return (
+                "Review recommended with manager considerations: "
+                + str(considerations[0]).replace("MANAGER CONSIDERATION:", "").strip()
+            )
 
     if rec == "RECOMMEND_REJECT":
         # Never blame this finding on unrelated kit placeholders
@@ -907,6 +940,18 @@ def _artifact_readiness_block(
     ).upper()
     if not remediation_status:
         remediation_status = "PREREQUISITES_REQUIRED" if placeholders else "NOT_READY"
+
+    perm = (
+        (ca or {}).get("execution_permission_assessment")
+        or (impact or {}).get("execution_permission_assessment")
+        or {}
+    )
+    staged = (ca or {}).get("staged_remediation") or (impact or {}).get("staged_remediation") or {}
+    permission_ready = str(
+        (ca or {}).get("permission_ready")
+        or perm.get("permission_ready")
+        or ""
+    ).upper()
 
     # Persistent remediation lifecycle overrides (cross-job continuity)
     lifecycle = {}
@@ -1059,6 +1104,22 @@ def _artifact_readiness_block(
         or (impact or {}).get("required_remediation_role_permissions")
         or (resolution or {}).get("required_remediation_role_permissions")
         or [],
+        "permission_ready": permission_ready or None,
+        "execution_permission_assessment": perm or None,
+        "execution_capability": (ca or {}).get("execution_capability")
+        or (impact or {}).get("execution_capability")
+        or perm
+        or None,
+        "capability_bootstrap": (ca or {}).get("capability_bootstrap")
+        or (impact or {}).get("capability_bootstrap")
+        or None,
+        "bootstrap_authorization_status": (ca or {}).get("bootstrap_authorization_status")
+        or (impact or {}).get("bootstrap_authorization_status")
+        or None,
+        "execution_gate": (ca or {}).get("execution_gate")
+        or (impact or {}).get("execution_gate")
+        or None,
+        "staged_remediation": None,  # deprecated — capability bootstrap is separate
         "what_will_change": (
             (
                 "Create the remaining AWS Config infrastructure in the current recovery plan "
@@ -1549,8 +1610,27 @@ def build_manager_card(
             else ((impact or {}).get("remediation_fully_hardened") if is_primary else None)
         ),
         "approval_integrity": integ_plain,
-        "manager_input_needed": bool(questions),
+        "manager_input_needed": bool(
+            [
+                q
+                for q in (questions or [])
+                if "MANAGER CONTEXT REQUIRED" in str(q).upper()
+                or any(
+                    tok in str(q).lower()
+                    for tok in (
+                        "intentionally public",
+                        "interrupt legitimate traffic",
+                        "break-glass",
+                        "evidence is insufficient",
+                    )
+                )
+            ]
+        )
+        or bool(ca.get("manager_context_required")),
         "manager_questions": questions,
+        "manager_considerations": [
+            q for q in (questions or []) if "MANAGER CONSIDERATION" in str(q).upper()
+        ],
         "learning": learning,
         "cross_agent": _cross_agent_plain(ca) if is_primary else [],
         "banner": (

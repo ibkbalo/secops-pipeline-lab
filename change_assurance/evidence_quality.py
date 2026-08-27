@@ -218,9 +218,17 @@ def classify_evidence_item(
         if q != QUALITY_DIRECT or not spec:
             return q
     observed = item.get("observed_value")
+    # Known AWS responses that semantically prove control state are DIRECT evidence,
+    # even when the transport layer raised a ClientError (e.g. SubscriptionRequired).
+    semantic_control_state = isinstance(observed, dict) and (
+        bool(observed.get("semantic"))
+        or bool(observed.get("control_state"))
+        or str(observed.get("evidence_quality") or "").upper() == QUALITY_DIRECT
+    )
     if item.get("error") or str(item.get("status") or "").upper() == "ERROR":
-        return QUALITY_ERROR
-    if isinstance(observed, dict) and observed.get("error"):
+        if not semantic_control_state:
+            return QUALITY_ERROR
+    if isinstance(observed, dict) and observed.get("error") and not semantic_control_state:
         return QUALITY_ERROR
     if not spec:
         return QUALITY_INDIRECT

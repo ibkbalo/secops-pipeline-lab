@@ -221,9 +221,44 @@
         <div class="mm-context-label">MANAGER INPUT NEEDED</div>
         <p>The AI cannot make this decision alone without business context.</p>
         {% for q in primary.manager_questions[:4] %}
+        {% if "MANAGER CONSIDERATION" not in (q|string|upper) %}
         <p class="mm-context-q"><strong>Question:</strong> {{ q }}</p>
+        {% endif %}
         {% endfor %}
       </div>
+      {% elif primary.manager_considerations %}
+      <div class="mm-context">
+        <div class="mm-context-label">MANAGER CONSIDERATIONS</div>
+        <p>Sentinel completed the technical analysis. Review these business considerations before you Approve or Reject. They do not by themselves block an AI APPROVE recommendation.</p>
+        {% for q in primary.manager_considerations[:4] %}
+        <p class="mm-context-q"><strong>Consider:</strong> {{ q }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if primary.artifact_readiness and (primary.artifact_readiness.execution_capability or primary.artifact_readiness.capability_bootstrap) %}
+      {% set cap = primary.artifact_readiness.execution_capability or {} %}
+      {% set boot = primary.artifact_readiness.capability_bootstrap %}
+      {% if cap.state == "READY" %}
+      <div class="mm-context">
+        <div class="mm-context-label">EXECUTION CAPABILITY</div>
+        <p><strong>READY</strong></p>
+        <p>Sentinel independently verified that the configured remediation identity has the permissions required to execute this reviewed GuardDuty remediation.</p>
+        <p class="mm-secondary">Bootstrap: {{ boot.authorization_status if boot else primary.artifact_readiness.bootstrap_authorization_status or "SATISFIED" }} · Execution gate: {{ primary.artifact_readiness.execution_gate or "READY_PENDING_MANAGER_AUTHORIZATION" }}</p>
+      </div>
+      {% elif cap.state and cap.state != "NOT_SUPPORTED" %}
+      <div class="mm-context">
+        <div class="mm-context-label">EXECUTION CAPABILITY</div>
+        <p><strong>{{ cap.state or primary.artifact_readiness.permission_ready or "MISSING_PERMISSIONS" }}</strong></p>
+        <p>Sentinel administrator must provision the {{ cap.service or "required" }} remediation capability before this finding can be executed. This is installation/capability provisioning — not the security remediation itself.</p>
+        {% if boot and not boot.satisfied %}
+        <p><strong>Bootstrap package:</strong> {{ boot.authorization_status or primary.artifact_readiness.bootstrap_authorization_status or "READY_FOR_ADMIN_AUTHORIZATION" }}</p>
+        <p class="mono">{{ boot.terraform_relpath }}</p>
+        <p class="mm-secondary">{{ boot.ordinary_remediation_note }}</p>
+        {% endif %}
+        <p class="mm-secondary">Execution gate: {{ primary.artifact_readiness.execution_gate or "BLOCKED_PENDING_CAPABILITY" }}</p>
+      </div>
+      {% endif %}
       {% endif %}
 
       {% if primary.artifact_readiness and primary.artifact_readiness.remediation_status in ["PREREQUISITES_RESOLVED", "RECOVERY_REQUIRED"] %}

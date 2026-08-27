@@ -385,6 +385,12 @@ def test_11_per_finding_iam013_clear_creates_case(tmp_path: Path):
         "apply_status": "not_executed",
         "created_at": "2026-08-15T15:00:00Z",
         "decided_at": "2026-08-19T13:00:00Z",
+        "finding_execution": {
+            "CLOUD-IAM-013": {
+                "status": "COMPLETED",
+                "succeeded_resources": ["aws_accessanalyzer_analyzer.sentinel"],
+            }
+        },
     }
     _write(tmp_path / "jobs" / "job_aa_before.json", job)
     # Human TF approval binding + draft terraform for CLOUD-IAM-013
@@ -568,6 +574,12 @@ def test_14_duplicate_and_completed_count_and_no_auto_exec(tmp_path: Path):
         "finding_decisions": {"CLOUD-IAM-013": "approved"},
         "created_at": "2026-08-15T15:00:00Z",
         "decided_at": "2026-08-19T13:00:00Z",
+        "finding_execution": {
+            "CLOUD-IAM-013": {
+                "status": "COMPLETED",
+                "succeeded_resources": ["aws_accessanalyzer_analyzer.sentinel"],
+            }
+        },
     }
     _write(tmp_path / "jobs" / "job_dup.json", job)
     _write(
@@ -670,6 +682,12 @@ def test_15_iam013_narrative_and_assurance_semantics(tmp_path: Path):
         "created_at": "2026-08-15T15:00:00Z",
         "decided_at": "2026-08-19T13:00:00Z",
         "kit_path": str(tmp_path / "kit.zip"),
+        "finding_execution": {
+            "CLOUD-IAM-013": {
+                "status": "COMPLETED",
+                "succeeded_resources": ["aws_accessanalyzer_analyzer.sentinel"],
+            }
+        },
     }
     _write(tmp_path / "jobs" / f"{job_id}.json", job)
     _seed_aa_assurance(tmp_path, job_id)
@@ -790,6 +808,12 @@ def test_17_case0001_execution_untouched_and_completed_count(tmp_path: Path):
         "created_at": "2026-08-15T15:00:00Z",
         "decided_at": "2026-08-19T13:00:00Z",
         "kit_path": str(tmp_path / "kit.zip"),
+        "finding_execution": {
+            "CLOUD-IAM-013": {
+                "status": "COMPLETED",
+                "succeeded_resources": ["aws_accessanalyzer_analyzer.sentinel"],
+            }
+        },
     }
     _write(tmp_path / "jobs" / f"{job_id}.json", job)
     _seed_aa_assurance(tmp_path, job_id)

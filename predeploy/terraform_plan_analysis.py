@@ -371,17 +371,12 @@ def analyze_terraform_sources(sources: dict[str, str]) -> dict[str, Any]:
                 "aws_s3_bucket_ownership_controls",
             }:
                 flags["data_access_change"] = True
-            if rtype in {
-                "aws_cloudtrail",
-                "aws_guardduty_detector",
-                "aws_config_configuration_recorder",
-                "aws_config_delivery_channel",
-                "aws_config_configuration_recorder_status",
-            }:
-                flags["config_recorder_enable"] = True if "config" in rtype else flags.get("config_recorder_enable")
-                if rtype == "aws_config_configuration_recorder":
-                    flags["config_recorder_enable"] = True
-                pass
+            if rtype == "aws_config_configuration_recorder":
+                flags["config_recorder_enable"] = True
+            if rtype == "aws_guardduty_detector":
+                flags["guardduty_enable"] = True
+            if rtype == "aws_accessanalyzer_analyzer":
+                flags["access_analyzer_enable"] = True
         if DESTROY_HINTS.search(text):
             flags["destructive_tf"] = True
 

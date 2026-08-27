@@ -68,8 +68,9 @@ def flags_from_plan_addresses(
 ) -> dict[str, Any]:
     """Recompute action flags from CURRENT plan addresses (not source .tf alone)."""
     flags = dict(base_flags or {})
+    action_keys = _ACTION_FLAG_KEYS + ("guardduty_enable",)
     if clear_action_flags:
-        for k in _ACTION_FLAG_KEYS:
+        for k in action_keys:
             flags[k] = False
     text = " ".join(str(a) for a in (addresses or [])).lower()
     if "aws_iam_" in text:
@@ -78,6 +79,8 @@ def flags_from_plan_addresses(
         flags["config_recorder_enable"] = True
     if "aws_accessanalyzer_" in text or "accessanalyzer" in text.replace("_", ""):
         flags["access_analyzer_enable"] = True
+    if "aws_guardduty_" in text or "guardduty" in text.replace("_", ""):
+        flags["guardduty_enable"] = True
     if any(
         tok in text
         for tok in ("aws_security_group", "aws_network_acl", "aws_vpc", "aws_subnet", "aws_route")
@@ -106,6 +109,10 @@ def _has_config_action(addresses: list[str]) -> bool:
     return any("aws_config_" in a.lower() for a in addresses)
 
 
+def _has_guardduty_action(addresses: list[str]) -> bool:
+    return any("aws_guardduty_" in a.lower() for a in addresses)
+
+
 def _has_s3_delivery_action(addresses: list[str]) -> bool:
     return any(
         ("aws_s3_" in a.lower() and "config" in a.lower()) or "delivery_channel" in a.lower()
@@ -123,7 +130,8 @@ def manager_questions_for_plan(
 ) -> list[str]:
     """
     Manager questions derived from CURRENT plan actions + unresolved business context.
-    Does not ask about IAM when the current plan has no IAM create/change/destroy.
+    Blocking items use MANAGER CONTEXT REQUIRED.
+    Informational items use MANAGER CONSIDERATION (do not force RECOMMEND_REVIEW alone).
     """
     finding = finding or {}
     flags = dict(flags or {})
@@ -148,7 +156,11 @@ def manager_questions_for_plan(
     if iam_in_plan:
         title_l = str(finding.get("title") or "").lower()
         fid = str(finding.get("id") or "").upper()
-        if "access analyzer" not in title_l and fid != "CLOUD-IAM-013":
+        # GuardDuty ordinary remediation is detector-only; IAM bootstrap is a separate
+        # capability-provisioning flow — do not force break-glass CONTEXT REQUIRED.
+        if "guardduty" in title_l or fid in {"CLOUD-LOG-003", "CLOUD-DFT-001"}:
+            pass
+        elif "access analyzer" not in title_l and fid != "CLOUD-IAM-013":
             qs.append(
                 "MANAGER CONTEXT REQUIRED: Will IAM changes affect break-glass or production roles?"
             )
@@ -171,6 +183,28 @@ def manager_questions_for_plan(
 
     if flags.get("networking_change"):
         qs.append("MANAGER CONTEXT REQUIRED: Will networking changes interrupt legitimate traffic?")
+
+    gd_in_plan = _has_guardduty_action(addrs) if addrs else bool(flags.get("guardduty_enable"))
+    title_l = str(finding.get("title") or "").lower()
+    fid = str(finding.get("id") or "").upper()
+    if gd_in_plan or "guardduty" in title_l or fid in {"CLOUD-LOG-003", "CLOUD-DFT-001"}:
+        region = (
+            str((disc.get("region") or "")).strip()
+            or str(((assessment.get("observed") or {}) if isinstance(assessment.get("observed"), dict) else {}).get("region") or "")
+            or "the planned Region"
+        )
+        qs.append(
+            "MANAGER CONSIDERATION: Enabling Amazon GuardDuty incurs AWS service cost that depends on "
+            "monitored activity/features — exact future cost is not fabricated here; confirm budget fit."
+        )
+        qs.append(
+            f"MANAGER CONSIDERATION: This remediation enables GuardDuty in {region} only — "
+            "multi-region coverage is a separate decision and is not proven by this single-region plan."
+        )
+        qs.append(
+            "MANAGER CONSIDERATION: GuardDuty is a detective control — enabling a detector does not by itself "
+            "block attacks or modify application workloads."
+        )
 
     seen: set[str] = set()
     out: list[str] = []

@@ -166,11 +166,11 @@ def test_18_execution_ready_false_until_lifecycle():
         remediation_risk="MEDIUM",
         destructive=False,
         placeholders=False,
-        manager_questions=["Confirm Config cost/budget acceptance"],
+        manager_questions=["MANAGER CONTEXT REQUIRED: Confirm expected AWS Config/S3 cost is acceptable."],
     )
     assert rec["deployment_ready"] is False
     assert rec.get("manager_approval_required") is True
-
+    assert rec["recommendation"] == "RECOMMEND_REVIEW"
 
 def test_19_manager_mode_records_create_dedicated():
     finding = {"id": "CLOUD-LOG-002", "title": "AWS Config recorder enabled", "severity": "high"}

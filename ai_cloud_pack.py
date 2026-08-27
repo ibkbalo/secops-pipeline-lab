@@ -704,11 +704,36 @@ def _engine_logging(ctx: PackContext) -> list[dict]:
               "AWS Config is not recording resource configuration history.",
               control_id="CLOUD-LOG-002")
         gd = _as_list(d.get("guardduty_detectors"))
+        gd_meta = d.get("guardduty") if isinstance(d.get("guardduty"), dict) else {}
         gd_on = any(str(g.get("status") or "").upper() == "ENABLED" or _truthy(g.get("enabled")) for g in gd)
-        _fail(ctx, f, eng, "aws", gd_on,
-              "GuardDuty detector enabled", "high",
-              "GuardDuty is not enabled — threat detection for the account is blind.",
-              control_id="CLOUD-LOG-003")
+        # SubscriptionRequired / empty list = control failing (coverage absent), not "unknown"
+        if not gd_on and (
+            gd_meta.get("control_state") == "SERVICE_NOT_SUBSCRIBED"
+            or gd_meta.get("semantic")
+            or "SubscriptionRequired" in str(gd_meta.get("aws_response_classification") or "")
+        ):
+            gd_on = False
+        _fail(
+            ctx,
+            f,
+            eng,
+            "aws",
+            gd_on,
+            "GuardDuty detector enabled",
+            "high",
+            "GuardDuty is not enabled — threat detection for the account is blind.",
+            control_id="CLOUD-LOG-003",
+            evidence={
+                "source": "guardduty.list_detectors",
+                "region": gd_meta.get("region") or d.get("region"),
+                "detector_count": len(gd),
+                "detectors": gd[:5],
+                "aws_response_classification": gd_meta.get("aws_response_classification"),
+                "control_state": gd_meta.get("control_state"),
+                "human_observed": gd_meta.get("human_observed"),
+                "notes": gd_meta.get("notes"),
+            },
+        )
         sechub = d.get("security_hub") or {}
         if d.get("security_hub") is not None:
             _fail(ctx, f, eng, "aws", _truthy(sechub.get("enabled")),
